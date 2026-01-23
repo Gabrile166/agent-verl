@@ -3,7 +3,7 @@ ENGINE=${1:-vllm}
 export http_proxy="http://10.70.11.190:8412"
 export https_proxy="http://10.70.11.190:8412"
 export no_proxy="localhost,127.0.0.1,0.0.0.0"
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN
+export VLLM_ATTENTION_BACKEND=XFORMERS
 
 source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
 conda activate rlvmr-alfworld
@@ -28,8 +28,8 @@ python3 -m examples.data_preprocess.prepare \
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=gigpo \
-    data.train_files=$BASE_PATH/data/verl-agent/text/train.parquet \
-    data.val_files=$BASE_PATH/data/verl-agent/text/test.parquet \
+    data.train_files=$BASE_PATH/data/text/train.parquet \
+    data.val_files=$BASE_PATH/data/text/test.parquet \
     data.train_batch_size=$train_data_size \
     data.val_batch_size=$val_data_size \
     data.max_prompt_length=2048 \
@@ -49,7 +49,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
@@ -74,9 +74,9 @@ python3 -m verl.trainer.main_ppo \
     trainer.logger=['console','wandb'] \
     trainer.project_name='verl_agent_alfworld' \
     trainer.experiment_name='gigpo_qwen2.5_1.5b' \
-    trainer.n_gpus_per_node=2 \
+    trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
-    trainer.save_freq=-1 \
+    trainer.save_freq=10 \
     trainer.test_freq=5 \
-    trainer.total_epochs=150 \
+    trainer.total_epochs=100 \
     trainer.val_before_train=True $@

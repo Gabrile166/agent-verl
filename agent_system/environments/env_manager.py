@@ -608,7 +608,7 @@ class SciWorldEnvironmentManager(EnvironmentManagerBase):
         self.plannings = []
         self.expert_trajectories = []  # 使用 List 格式，与 AlfWorld 一致
         self.meta_think = self.config is not None and self.config.env.sciworld.meta_think if hasattr(self.config.env, 'sciworld') and hasattr(self.config.env.sciworld, 'meta_think') else False
-        super().__init__(envs, projection_f, env_name)
+        super().__init__(envs, projection_f, config)
 
     def reset(self):
         text_obs, infos = self.envs.reset()

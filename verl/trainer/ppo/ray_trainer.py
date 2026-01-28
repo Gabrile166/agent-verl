@@ -94,6 +94,7 @@ class AdvantageEstimator(str, Enum):
     RLOO = "rloo"
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
+    HybridGRPO = 'hybrid_grpo'  # Hybrid GRPO with Discriminator rewards
 
 
 @dataclass
@@ -357,6 +358,31 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+    elif adv_estimator == AdvantageEstimator.HybridGRPO:
+        # Hybrid GRPO with optional Discriminator rewards
+        from rlvmr.core_hybrid import compute_hybrid_outcome_advantage
+        
+        # Get hybrid reward config
+        hybrid_cfg = kwargs.get("hybrid_reward_config", {})
+        reward_mode = hybrid_cfg.get("reward_mode", "grpo")
+        episode_reward_weight = hybrid_cfg.get("episode_reward_weight", 1.0)
+        step_reward_weight = hybrid_cfg.get("step_reward_weight", 1.0)
+        
+        advantages, returns = compute_hybrid_outcome_advantage(
+            token_level_rewards=data.batch['token_level_rewards'],
+            response_mask=data.batch['response_mask'],
+            index=data.non_tensor_batch['uid'],
+            traj_index=data.non_tensor_batch['traj_uid'],
+            env_step_rewards=data.batch.get('step_rewards'),
+            disc_step_rewards=data.batch.get('disc_step_rewards'),
+            disc_episode_rewards=data.batch.get('disc_episode_rewards'),
+            episode_reward_weight=episode_reward_weight,
+            step_reward_weight=step_reward_weight,
+            reward_mode=reward_mode,
+            norm_adv_by_std=norm_adv_by_std_in_grpo,
+        )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
     else:
         raise NotImplementedError
     return data
@@ -451,7 +477,8 @@ class RayPPOTrainer:
             AdvantageEstimator.REMAX,
             AdvantageEstimator.RLOO,
             AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
-            AdvantageEstimator.GiGPO
+            AdvantageEstimator.GiGPO,
+            AdvantageEstimator.HybridGRPO
         ]:
             self.use_critic = False
         else:

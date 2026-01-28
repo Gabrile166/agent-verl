@@ -255,6 +255,37 @@ algorithm:
   filter_groups: # DAPO from https://arxiv.org/abs/2503.14476
     enable: False
     max_num_gen_batches: 10
+  
+  # Hybrid Reward Mode Configuration (from Agent-PRM)
+  # This enables combining environment rewards with discriminator-based rewards
+  hybrid_reward:
+    enable: False                    # Whether to enable hybrid reward mode
+    reward_mode: "grpo"              # Options: "grpo" (default) | "discriminator" | "hybrid"
+    episode_reward_weight: 1.0       # Weight for episode-level rewards
+    step_reward_weight: 1.0          # Weight for step-level rewards
+  
+  # Discriminator Configuration for PRM-style rewards
+  # Requires an external discriminator model served via OpenAI-compatible API
+  discriminator:
+    enable: False                    # Whether to enable discriminator
+    use_expert: False                # Whether to use expert trajectory as reference
+    base_urls: ["http://127.0.0.1:8080/v1"]  # Discriminator API endpoints (supports load balancing)
+    api_key: "EMPTY"                 # API key for authentication
+    model_name: "discriminator"      # Model name for API requests
+    max_concurrency_per_url: 16      # Max concurrent requests per URL
+    request_timeout: 120             # Request timeout in seconds
+    prompt_template: "milestone"     # Options: "milestone" | "custom"
+  
+  # Expert Trajectory Configuration (optional, for N+1 Worker architecture)
+  expert:
+    enable: False                    # Whether to enable expert worker
+    workers_per_group: 8             # Number of policy workers per group
+    # Expert workers = total_workers / (workers_per_group + 1)
+  
+  # Trajectory Save Configuration for debugging and analysis
+  trajectory_save:
+    enable: False                    # Whether to save trajectories
+    output_dir: null                 # Directory to save trajectories (null = disabled)
 
 trainer:
   balance_batch: True

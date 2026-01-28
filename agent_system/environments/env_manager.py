@@ -241,6 +241,119 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 success[f"{task}_success_rate"].append(won_value)
                 break
 
+    # ==================== Expert Trajectory Collection ====================
+    
+    def get_expert_trajectories(self) -> List[List[Dict]]:
+        """
+        获取当前 episode 的专家轨迹
+        
+        Returns:
+            List of expert trajectories, one per environment
+        """
+        expert_trajectories = []
+        
+        # 尝试从 infos 中获取 expert_plan
+        for i in range(len(self.tasks)):
+            traj = []
+            # 如果环境提供了 expert_plan，使用它
+            # 这里只是接口定义，实际数据需要在 reset/step 时收集
+            expert_trajectories.append(traj)
+        
+        return expert_trajectories
+    
+    def collect_expert_from_info(self, info: Dict) -> List[Dict]:
+        """
+        从环境 info 中提取专家轨迹信息
+        
+        Args:
+            info: 环境返回的 info 字典
+        
+        Returns:
+            专家轨迹步骤列表
+        """
+        expert_plan = info.get('extra.expert_plan', [])
+        if not expert_plan:
+            return []
+        
+        # 转换为标准格式
+        trajectory = []
+        for action in expert_plan:
+            trajectory.append({
+                "observation": "",
+                "action": action if isinstance(action, str) else str(action),
+            })
+        
+        return trajectory
+    
+    def is_expert_in_group_enabled(self) -> bool:
+        """
+        检查是否启用 Expert Worker 模式
+        
+        Returns:
+            True if N+1 architecture is enabled
+        """
+        if hasattr(self.config, 'algorithm') and hasattr(self.config.algorithm, 'expert'):
+            return self.config.algorithm.expert.get('enable', False)
+        return False
+    
+    def get_workers_per_group(self) -> int:
+        """
+        获取每组的 worker 数量
+        
+        Returns:
+            workers_per_group (包含 Expert Worker)
+        """
+        if self.is_expert_in_group_enabled():
+            if hasattr(self.config.algorithm.expert, 'workers_per_group'):
+                return self.config.algorithm.expert.workers_per_group
+        # 默认使用 rollout.n
+        if hasattr(self.config, 'env') and hasattr(self.config.env, 'rollout'):
+            return self.config.env.rollout.get('n', 1)
+        return 1
+    
+    def get_policy_indices(self) -> List[int]:
+        """
+        获取 Policy Worker 索引
+        
+        Returns:
+            List of indices for policy workers (excluding expert workers)
+        """
+        if not self.is_expert_in_group_enabled():
+            # 未启用 Expert 模式，所有 worker 都是 policy
+            return list(range(len(self.tasks)))
+        
+        workers_per_group = self.get_workers_per_group()
+        total_workers = len(self.tasks)
+        
+        # 每组最后一个是 Expert Worker
+        policy_indices = []
+        for i in range(total_workers):
+            if (i + 1) % workers_per_group != 0:  # 非 Expert
+                policy_indices.append(i)
+        
+        return policy_indices
+    
+    def get_expert_indices(self) -> List[int]:
+        """
+        获取 Expert Worker 索引
+        
+        Returns:
+            List of indices for expert workers
+        """
+        if not self.is_expert_in_group_enabled():
+            return []
+        
+        workers_per_group = self.get_workers_per_group()
+        total_workers = len(self.tasks)
+        
+        # 每组最后一个是 Expert Worker
+        expert_indices = []
+        for i in range(total_workers):
+            if (i + 1) % workers_per_group == 0:  # Expert
+                expert_indices.append(i)
+        
+        return expert_indices
+
 
 class SokobanEnvironmentManager(EnvironmentManagerBase):
     ACTION_LOOKUP = {

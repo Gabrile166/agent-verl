@@ -411,7 +411,42 @@ class TrajectoryCollector:
                     episode_lengths=episode_lengths,
                     )
         
-        return total_batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings
+        # ==================== Expert Trajectory Collection ====================
+        expert_trajectories = []
+        if hasattr(envs, 'get_expert_trajectories'):
+            expert_trajectories = envs.get_expert_trajectories()
+        
+        # 获取任务描述
+        tasks = []
+        if hasattr(envs, 'tasks'):
+            tasks = envs.tasks
+        
+        # 过滤 Expert Worker 数据（如果启用 N+1 架构）
+        if hasattr(envs, 'is_expert_in_group_enabled') and envs.is_expert_in_group_enabled():
+            policy_indices = envs.get_policy_indices()
+            expert_indices = envs.get_expert_indices()
+            
+            print(f"[Rollout] Filtering Expert Workers: keeping {len(policy_indices)} policy envs, "
+                  f"removing {len(expert_indices)} expert envs")
+            
+            # 只保留 Policy Workers 的轨迹
+            total_batch_list = [total_batch_list[i] for i in policy_indices]
+            episode_rewards = np.array([episode_rewards[i] for i in policy_indices])
+            episode_lengths = np.array([episode_lengths[i] for i in policy_indices])
+            traj_uid = np.array([traj_uid[i] for i in policy_indices])
+            tool_callings = np.array([tool_callings[i] for i in policy_indices])
+            
+            # 过滤 success 字典
+            if success:
+                for key in success:
+                    if isinstance(success[key], np.ndarray):
+                        success[key] = np.array([success[key][i] for i in policy_indices])
+            
+            # 过滤 tasks
+            if tasks:
+                tasks = [tasks[i] for i in policy_indices if i < len(tasks)]
+        
+        return total_batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings, expert_trajectories, tasks
     
     def dynamic_multi_turn_loop(
             self,
@@ -442,6 +477,8 @@ class TrajectoryCollector:
         total_success = []
         total_traj_uid = []
         total_tool_callings = []
+        total_expert_trajectories = []
+        total_tasks = []
         try_count: int = 0
         max_try_count = self.config.algorithm.filter_groups.max_num_gen_batches
 
@@ -451,7 +488,7 @@ class TrajectoryCollector:
                 print(f"valid num={len(total_batch_list)} < target num={self.config.data.train_batch_size * self.config.env.rollout.n}. Keep generating... ({try_count}/{max_try_count})")
             try_count += 1
 
-            batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings = self.vanilla_multi_turn_loop(
+            batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings, expert_trajectories, tasks = self.vanilla_multi_turn_loop(
                 gen_batch=gen_batch,
                 actor_rollout_wg=actor_rollout_wg,
                 envs=envs,
@@ -472,6 +509,8 @@ class TrajectoryCollector:
             total_success.append(success)
             total_traj_uid.append(traj_uid)
             total_tool_callings.append(tool_callings)
+            total_expert_trajectories.extend(expert_trajectories[:len(batch_list)])
+            total_tasks.extend(tasks[:len(batch_list)])
 
         total_episode_rewards = np.concatenate(total_episode_rewards, axis=0)
         total_episode_lengths = np.concatenate(total_episode_lengths, axis=0)
@@ -479,7 +518,7 @@ class TrajectoryCollector:
         total_traj_uid = np.concatenate(total_traj_uid, axis=0)
         total_tool_callings = np.concatenate(total_tool_callings, axis=0)
 
-        return total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, total_tool_callings
+        return total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, total_tool_callings, total_expert_trajectories, total_tasks
 
     def multi_turn_loop(
             self,
@@ -506,7 +545,7 @@ class TrajectoryCollector:
         # Initial observations from the environment
         if self.config.algorithm.filter_groups.enable and is_train:
             # Dynamic Sampling (for DAPO and Dynamic GiGPO)
-            total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings = \
+            total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings, expert_trajectories, tasks = \
                 self.dynamic_multi_turn_loop(
                 gen_batch=gen_batch,
                 actor_rollout_wg=actor_rollout_wg,
@@ -514,7 +553,7 @@ class TrajectoryCollector:
             )
         else:
             # Vanilla Sampling   
-            total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings = \
+            total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings, expert_trajectories, tasks = \
                 self.vanilla_multi_turn_loop(
                 gen_batch=gen_batch,
                 actor_rollout_wg=actor_rollout_wg,
@@ -535,5 +574,9 @@ class TrajectoryCollector:
             traj_uid=total_traj_uid,
             tool_callings=totoal_tool_callings,
         )
+        
+        # Store expert trajectories in meta_info (for Hybrid Reward calculation)
+        gen_batch_output.meta_info["expert_trajectories"] = expert_trajectories
+        gen_batch_output.meta_info["tasks"] = tasks
         
         return gen_batch_output

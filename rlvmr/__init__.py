@@ -3,7 +3,7 @@
 # Provides discriminator-based reward calculation and hybrid advantage computation
 
 from rlvmr.discriminator_reward import DiscriminatorRewardCalculator, DiscriminatorConfig
-from rlvmr.core_hybrid import compute_hybrid_outcome_advantage, compute_hybrid_step_advantage
+from rlvmr.core_hybrid import compute_hybrid_outcome_advantage
 from rlvmr.expert_trajectory import (
     ExpertTrajectoryGeneratorBase,
     AlfWorldExpertGenerator,
@@ -16,7 +16,6 @@ __all__ = [
     "DiscriminatorRewardCalculator",
     "DiscriminatorConfig",
     "compute_hybrid_outcome_advantage",
-    "compute_hybrid_step_advantage",
     "ExpertTrajectoryGeneratorBase",
     "AlfWorldExpertGenerator",
     "create_expert_generator",

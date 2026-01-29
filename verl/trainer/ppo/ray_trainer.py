@@ -368,14 +368,27 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         episode_reward_weight = hybrid_cfg.get("episode_reward_weight", 1.0)
         step_reward_weight = hybrid_cfg.get("step_reward_weight", 1.0)
         
+        # Safely get optional fields (TensorDict.get() may raise KeyError)
+        def safe_get_batch(key, default=None):
+            try:
+                if key in data.batch.keys():
+                    return data.batch[key]
+            except:
+                pass
+            return default
+        
+        env_step_rewards = safe_get_batch('step_rewards')
+        disc_step_rewards = safe_get_batch('disc_step_rewards')
+        disc_episode_rewards = safe_get_batch('disc_episode_rewards')
+        
         advantages, returns = compute_hybrid_outcome_advantage(
             token_level_rewards=data.batch['token_level_rewards'],
             response_mask=data.batch['response_mask'],
             index=data.non_tensor_batch['uid'],
             traj_index=data.non_tensor_batch['traj_uid'],
-            env_step_rewards=data.batch.get('step_rewards'),
-            disc_step_rewards=data.batch.get('disc_step_rewards'),
-            disc_episode_rewards=data.batch.get('disc_episode_rewards'),
+            env_step_rewards=env_step_rewards,
+            disc_step_rewards=disc_step_rewards,
+            disc_episode_rewards=disc_episode_rewards,
             episode_reward_weight=episode_reward_weight,
             step_reward_weight=step_reward_weight,
             reward_mode=reward_mode,

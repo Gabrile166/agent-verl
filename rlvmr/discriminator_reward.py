@@ -149,7 +149,6 @@ class DiscriminatorRewardCalculator:
     def __init__(self, config: DiscriminatorConfig):
         self.config = config
         self.clients = []
-        self.semaphores = []
         self._initialized = False
         
         # 选择 prompt 模板
@@ -178,7 +177,7 @@ class DiscriminatorRewardCalculator:
                 timeout=self.config.request_timeout
             )
             self.clients.append(client)
-            self.semaphores.append(asyncio.Semaphore(self.config.max_concurrency_per_url))
+            # 注意：不在这里创建 Semaphore，避免事件循环绑定问题
         
         self._initialized = True
     
@@ -202,6 +201,12 @@ class DiscriminatorRewardCalculator:
         
         batch_size = len(policy_trajectories)
         
+        # 每次调用时创建新的 semaphores（绑定到当前事件循环，避免跨循环使用）
+        semaphores = [
+            asyncio.Semaphore(self.config.max_concurrency_per_url) 
+            for _ in self.clients
+        ]
+        
         # 准备专家轨迹
         if expert_trajectories is None:
             expert_trajectories = [None] * batch_size
@@ -209,7 +214,7 @@ class DiscriminatorRewardCalculator:
         # 构建所有请求
         tasks = []
         for i, (policy_traj, expert_traj) in enumerate(zip(policy_trajectories, expert_trajectories)):
-            tasks.append(self._compute_single_reward(i, policy_traj, expert_traj))
+            tasks.append(self._compute_single_reward(i, policy_traj, expert_traj, semaphores))
         
         # 并发执行
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -233,16 +238,19 @@ class DiscriminatorRewardCalculator:
         self,
         index: int,
         policy_trajectory: List[Dict],
-        expert_trajectory: Optional[List[Dict]]
+        expert_trajectory: Optional[List[Dict]],
+        semaphores: List[asyncio.Semaphore]
     ) -> Tuple[float, List[float]]:
         """计算单个轨迹的奖励"""
         # 选择客户端（负载均衡）
         client_idx = index % len(self.clients)
         client = self.clients[client_idx]
-        semaphore = self.semaphores[client_idx]
+        semaphore = semaphores[client_idx]
         
         # 构建 prompt
-        prompt = self.prompt_template.build_prompt(policy_trajectory, expert_trajectory)
+        # 确保 expert trajectory 格式正确
+        formatted_expert = format_expert_trajectory(expert_trajectory) if expert_trajectory else None
+        prompt = self.prompt_template.build_prompt(policy_trajectory, formatted_expert)
         
         async with semaphore:
             try:
@@ -332,3 +340,99 @@ def create_discriminator_from_config(config) -> Optional[DiscriminatorRewardCalc
         )
     )
 
+
+# ==================== Trajectory Formatting Functions ====================
+
+def format_policy_trajectory(
+    trajectory: List[Dict],
+    task: str = ""
+) -> Dict:
+    """
+    将原始策略轨迹格式化为 Discriminator 输入格式。
+    
+    关键功能：
+    1. 仅提取 <action> 标签内容，去除 <think>, <planning> 等推理标签
+    2. 从 anchor_obs 字段获取观测信息
+    3. 跳过 active_masks=False 的填充步骤
+    
+    Args:
+        trajectory: 原始轨迹数据列表，每个 step 包含:
+            - full_output: str, 完整模型输出（包含各种标签）
+            - active_masks: bool, 是否为有效步骤
+            - anchor_obs: str/List[str], 当前步骤的观测
+        task: 任务描述字符串
+    
+    Returns:
+        格式化的轨迹字典: {"task": str, "traj": List[Dict]}
+        其中 traj 每个元素为 {"obs": str, "action": str}
+    """
+    formatted_steps = []
+    
+    for step in trajectory:
+        # 跳过非活跃步骤（填充步骤）
+        if not step.get('active_masks', False):
+            continue
+        
+        full_output = step.get('full_output', '')
+        
+        # 提取 action: 优先从 <action> 标签提取
+        action = ""
+        action_match = re.search(r'<action>(.*?)</action>', full_output, re.DOTALL)
+        if action_match:
+            action = action_match.group(1).strip()
+        else:
+            # 如果没有 action 标签，尝试清理其他标签后使用
+            # 移除 <think>...</think>, <planning>...</planning> 等
+            cleaned = re.sub(r'<think>.*?</think>', '', full_output, flags=re.DOTALL)
+            cleaned = re.sub(r'<planning>.*?</planning>', '', cleaned, flags=re.DOTALL)
+            cleaned = re.sub(r'<explore>.*?</explore>', '', cleaned, flags=re.DOTALL)
+            cleaned = re.sub(r'<reflection>.*?</reflection>', '', cleaned, flags=re.DOTALL)
+            cleaned = re.sub(r'<monitor>.*?</monitor>', '', cleaned, flags=re.DOTALL)
+            action = cleaned.strip()
+        
+        # 获取观测
+        obs = step.get('anchor_obs', '')
+        if isinstance(obs, (list, tuple)) and len(obs) > 0:
+            obs = obs[0] if isinstance(obs[0], str) else str(obs[0])
+        elif not isinstance(obs, str):
+            obs = str(obs) if obs else ""
+        
+        formatted_steps.append({
+            'obs': obs,
+            'action': action
+        })
+    
+    return {
+        'task': task,
+        'traj': formatted_steps
+    }
+
+
+def format_expert_trajectory(expert_traj: List[Dict]) -> List[Dict]:
+    """
+    格式化 Expert 轨迹为标准格式。
+    
+    确保每个步骤包含 observation 和 action 字段。
+    
+    Args:
+        expert_traj: Expert 轨迹，每个步骤可能包含不同字段名
+    
+    Returns:
+        格式化的 Expert 轨迹列表，每个元素为:
+        {"observation": str, "action": str}
+    """
+    if not expert_traj:
+        return []
+    
+    formatted = []
+    for step in expert_traj:
+        # 兼容不同的字段名
+        obs = step.get('observation', step.get('obs', ''))
+        action = step.get('action', '')
+        
+        formatted.append({
+            'observation': obs if isinstance(obs, str) else str(obs),
+            'action': action if isinstance(action, str) else str(action)
+        })
+    
+    return formatted

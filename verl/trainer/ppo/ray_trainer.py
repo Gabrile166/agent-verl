@@ -691,45 +691,71 @@ class RayPPOTrainer:
         """
         从 batch 中构建 policy 轨迹用于 Discriminator 评估。
         
+        改进：使用 format_policy_trajectory 函数，仅提取 <action> 标签内容，
+        去除 <think>, <planning> 等推理标签，并包含观测信息。
+        
         Args:
             batch: DataProto containing rollout data
             
         Returns:
-            List of trajectories, each trajectory is a list of step dicts
+            List of formatted trajectories for Discriminator input
         """
-        trajectories = []
+        from collections import defaultdict
+        from rlvmr.discriminator_reward import format_policy_trajectory
+        
+        # 获取轨迹 ID 用于分组
+        traj_uids = batch.non_tensor_batch.get('traj_uid', None)
         batch_size = len(batch.batch['responses'])
         
         # 获取 responses 和 decode
         responses = batch.batch['responses']
         response_texts = [self.tokenizer.decode(resp, skip_special_tokens=True) for resp in responses]
         
-        # 获取轨迹 ID 用于分组
-        traj_uids = batch.non_tensor_batch.get('traj_uid', None)
+        # 获取观测信息 (anchor_obs)
+        anchor_obs_list = batch.non_tensor_batch.get('anchor_obs', [''] * batch_size)
+        
+        # 获取 active_masks
+        active_masks = batch.non_tensor_batch.get('active_masks', [True] * batch_size)
+        
+        # 获取任务描述
+        tasks = batch.non_tensor_batch.get('task', [''] * batch_size)
         
         if traj_uids is None:
             # 如果没有轨迹 ID，每个样本作为独立轨迹
+            trajectories = []
             for i in range(batch_size):
-                traj = [{
-                    "observation": "",
-                    "action": response_texts[i],
+                # 构建单步轨迹数据
+                step_data = [{
+                    'active_masks': active_masks[i] if i < len(active_masks) else True,
+                    'full_output': response_texts[i],
+                    'anchor_obs': anchor_obs_list[i] if i < len(anchor_obs_list) else ''
                 }]
-                trajectories.append(traj)
+                task = tasks[i] if i < len(tasks) else ''
+                formatted = format_policy_trajectory(step_data, task=task)
+                trajectories.append(formatted)
         else:
             # 按轨迹 ID 分组
-            from collections import defaultdict
             traj_groups = defaultdict(list)
+            traj_tasks = {}
             
             for i in range(batch_size):
                 uid = traj_uids[i]
                 traj_groups[uid].append({
-                    "observation": "",
-                    "action": response_texts[i],
+                    'active_masks': active_masks[i] if i < len(active_masks) else True,
+                    'full_output': response_texts[i],
+                    'anchor_obs': anchor_obs_list[i] if i < len(anchor_obs_list) else ''
                 })
+                if uid not in traj_tasks:
+                    traj_tasks[uid] = tasks[i] if i < len(tasks) else ''
             
-            # 转换为列表
+            # 使用 format_policy_trajectory 格式化每个轨迹
+            trajectories = []
             for uid in traj_groups:
-                trajectories.append(traj_groups[uid])
+                formatted = format_policy_trajectory(
+                    traj_groups[uid], 
+                    task=traj_tasks.get(uid, '')
+                )
+                trajectories.append(formatted)
         
         return trajectories
 

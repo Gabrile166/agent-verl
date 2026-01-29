@@ -243,23 +243,52 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
 
     # ==================== Expert Trajectory Collection ====================
     
+    # ==================== Expert Trajectory Collection ====================
+    
     def get_expert_trajectories(self) -> List[List[Dict]]:
         """
-        获取当前 episode 的专家轨迹
+        获取当前 episode 的专家轨迹。
+        
+        通过调用 self.envs.get_expert_trajectories() 获取按 group 索引的轨迹，
+        然后将其映射到每个 Policy 样本上。
         
         Returns:
-            List of expert trajectories, one per environment
+            List of expert trajectories (对应 batch 中的每个样本)
         """
-        expert_trajectories = []
+        if not hasattr(self.envs, 'get_expert_trajectories'):
+            return [[] for _ in range(len(self.tasks))]
         
-        # 尝试从 infos 中获取 expert_plan
-        for i in range(len(self.tasks)):
-            traj = []
-            # 如果环境提供了 expert_plan，使用它
-            # 这里只是接口定义，实际数据需要在 reset/step 时收集
-            expert_trajectories.append(traj)
+        # 1. 获取原始 Expert 轨迹: {group_idx: trajectory}
+        expert_trajs_dict = self.envs.get_expert_trajectories()
         
-        return expert_trajectories
+        # 2. 映射到 Policy 样本
+        # 需要确定每个样本属于哪个 Group
+        # 根据 AlfworldEnvs 的逻辑：
+        # policy_indices[k] 对应第 k 个 Policy 样本
+        # 我们可以计算它的原始索引，从而计算 group_idx
+        
+        mapped_trajectories = []
+        
+        # 检查环境是否暴露了相关属性
+        if hasattr(self.envs, 'policy_indices') and hasattr(self.envs, 'workers_per_group'):
+            # 精确映射
+            for k in range(len(self.tasks)):
+                # k 是 Policy batch 的索引
+                # self.envs.policy_indices[k] 是对应的全局 worker 索引
+                if k < len(self.envs.policy_indices):
+                    worker_idx = self.envs.policy_indices[k]
+                    group_idx = worker_idx // self.envs.workers_per_group
+                    
+                    # 获取该组的 Expert 轨迹
+                    traj = expert_trajs_dict.get(group_idx, [])
+                    mapped_trajectories.append(traj)
+                else:
+                    mapped_trajectories.append([])
+        else:
+            # 回退逻辑：假设没有 Expert 模式或无法映射
+            mapped_trajectories = [[] for _ in range(len(self.tasks))]
+            
+        return mapped_trajectories
     
     def collect_expert_from_info(self, info: Dict) -> List[Dict]:
         """

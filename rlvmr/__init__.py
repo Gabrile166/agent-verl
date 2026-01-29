@@ -2,7 +2,12 @@
 # RLVMR module for agent-verl
 # Provides discriminator-based reward calculation and hybrid advantage computation
 
-from rlvmr.discriminator_reward import DiscriminatorRewardCalculator, DiscriminatorConfig
+from rlvmr.discriminator_reward import (
+    DiscriminatorRewardCalculator,
+    DiscriminatorConfig,
+    format_policy_trajectory,
+    format_expert_trajectory,
+)
 from rlvmr.core_hybrid import compute_hybrid_outcome_advantage
 from rlvmr.expert_trajectory import (
     ExpertTrajectoryGeneratorBase,
@@ -15,6 +20,8 @@ from rlvmr.expert_trajectory import (
 __all__ = [
     "DiscriminatorRewardCalculator",
     "DiscriminatorConfig",
+    "format_policy_trajectory",
+    "format_expert_trajectory",
     "compute_hybrid_outcome_advantage",
     "ExpertTrajectoryGeneratorBase",
     "AlfWorldExpertGenerator",

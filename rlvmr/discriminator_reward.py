@@ -247,10 +247,24 @@ class DiscriminatorRewardCalculator:
         client = self.clients[client_idx]
         semaphore = semaphores[client_idx]
         
+        # 解包 policy_trajectory（兼容两种格式）
+        if isinstance(policy_trajectory, dict):
+            # 新格式: {'task': '...', 'traj': [...]}
+            policy_steps = policy_trajectory.get('traj', [])
+            # 转换 'obs' -> 'observation' 以匹配 _format_trajectory 期望的格式
+            policy_steps = [
+                {'observation': s.get('obs', '') if isinstance(s, dict) else str(s), 
+                 'action': s.get('action', '') if isinstance(s, dict) else ''}
+                for s in policy_steps
+            ]
+        else:
+            # 旧格式: List[Dict]，直接使用
+            policy_steps = policy_trajectory if policy_trajectory else []
+        
         # 构建 prompt
         # 确保 expert trajectory 格式正确
         formatted_expert = format_expert_trajectory(expert_trajectory) if expert_trajectory else None
-        prompt = self.prompt_template.build_prompt(policy_trajectory, formatted_expert)
+        prompt = self.prompt_template.build_prompt(policy_steps, formatted_expert)
         
         async with semaphore:
             try:

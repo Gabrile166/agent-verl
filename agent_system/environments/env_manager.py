@@ -711,6 +711,299 @@ class AppWorldEnvironmentManager(EnvironmentManagerBase):
                     )
                 postprocess_text_obs.append(obs)
         return postprocess_text_obs
+    
+
+
+class SciWorldEnvironmentManager(EnvironmentManagerBase):
+    def __init__(self, envs, projection_f, env_name, config=None):
+        self.buffers = None
+        self.config = config
+        self.plannings = []
+        self.expert_trajectories = []  # 使用 List 格式，与 AlfWorld 一致
+        self.meta_think = self.config is not None and self.config.env.sciworld.meta_think if hasattr(self.config.env, 'sciworld') and hasattr(self.config.env.sciworld, 'meta_think') else False
+        super().__init__(envs, projection_f, config)
+
+    def reset(self):
+        text_obs, infos = self.envs.reset()
+
+        # Reset history buffer first
+        if self.buffers is not None:
+            self.buffers.clear()
+        self.buffers = [[] for _ in range(len(text_obs))]
+        self.plannings = ["No plan."] * len(text_obs)
+        self.tasks = []
+        self.pre_text_obs = text_obs
+        self.extract_task_descriptions(infos)
+        
+        # 初始化 expert 轨迹（与 AlfWorld 保持一致）
+        self._generate_expert_trajectories_for_envs()
+
+        full_text_obs = self.build_text_obs(text_obs, [info['available_actions'] for info in infos], init=True)
+        return {'text': full_text_obs, 'anchor': text_obs}, infos
+
+    def step(self, text_actions: List[str]):
+        import copy
+        full_output = copy.deepcopy(text_actions)
+        
+        # Unpack 4 values from projection (actions, valids, plannings, action_available)
+        actions, valids, plannings, action_available = self.projection_f(text_actions, meta_think=self.meta_think, available_actions=self.envs.get_possible_actions)
+
+        text_obs, rewards, dones, infos = self.envs.step(actions)
+        self.save_to_history_buffer(self.pre_text_obs, actions, full_output, plannings)
+        self.pre_text_obs = text_obs
+
+        full_text_obs = self.build_text_obs(text_obs, [info['available_actions'] for info in infos])
+
+        # add action_valid to infos
+        for i, info in enumerate(infos):
+            info['is_action_valid'] = to_numpy(valids[i])
+            info['full_output'] = full_output[i]
+            info['action_available'] = to_numpy(action_available[i])
+            info['score'] = info.get('score', -1)
+
+        next_observations = {'text': full_text_obs, 'anchor': text_obs}
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+
+        return next_observations, rewards, dones, infos
+
+    def _generate_expert_trajectories_for_envs(self):
+        """
+        初始化 expert 轨迹列表。
+        
+        与 AlfWorld 保持一致，使用 List[List[Dict]] 格式。
+        真正的轨迹在 rollout 完成后通过 collect_expert_trajectories_from_workers 获取。
+        """
+        # 获取 Policy 环境数量
+        num_policy_envs = len(self.envs.policy_indices) if hasattr(self.envs, 'policy_indices') else len(self.buffers) if self.buffers else 0
+        self.expert_trajectories = [[] for _ in range(num_policy_envs)]
+        
+        if self.is_expert_in_group_enabled():
+            print(f"[SciWorld Expert] Expert Workers enabled, trajectories will be collected after rollout")
+
+    def collect_expert_trajectories_from_workers(self) -> List[List[Dict]]:
+        """
+        从 Expert Workers 收集完整的 Expert 轨迹。
+        
+        应该在 rollout 完成后调用，此时 Expert Workers 已经执行了完整的 episode。
+        
+        新格式处理：
+        - Worker 返回 {"task_info": {...}, "steps": [...], "total_steps": int}
+        - 提取 "steps" 作为轨迹内容
+        - 步骤格式: {step_index, obs, action, obs_after}
+        
+        Returns:
+            List[List[Dict]]: 每个 Policy 环境对应的 Expert 轨迹（与 AlfWorld 格式一致）
+        """
+        if not hasattr(self.envs, 'get_expert_trajectories'):
+            return self.expert_trajectories
+        
+        # 获取带元数据的轨迹 Dict[int, Dict]
+        group_trajectories = self.envs.get_expert_trajectories()
+        
+        if not group_trajectories:
+            print("[SciWorld Expert] No trajectories collected from Expert Workers")
+            return self.expert_trajectories
+        
+        # 获取 workers_per_group 用于计算组索引
+        workers_per_group = getattr(self.envs, 'workers_per_group', self.envs.group_n + 1)
+        policy_indices = self.envs.policy_indices if hasattr(self.envs, 'policy_indices') else list(range(len(self.buffers) if self.buffers else 0))
+        
+        # 转换为 List[List[Dict]] 格式（与 AlfWorld 一致）
+        self.expert_trajectories = []
+        for policy_idx in policy_indices:
+            group_idx = policy_idx // workers_per_group
+            traj_with_metadata = group_trajectories.get(group_idx, {"steps": []})
+            
+            # 从新格式中提取 steps
+            if isinstance(traj_with_metadata, dict):
+                expert_steps = traj_with_metadata.get("steps", [])
+            else:
+                # 兼容旧格式（直接是列表）
+                expert_steps = traj_with_metadata if isinstance(traj_with_metadata, list) else []
+            
+            # 截断重复填充的步骤（任务完成后的无效动作）
+            truncated_traj = self._truncate_expert_trajectory(expert_steps)
+            self.expert_trajectories.append(truncated_traj)
+        
+        # 日志输出
+        success_count = 0
+        for traj_data in group_trajectories.values():
+            if isinstance(traj_data, dict):
+                if traj_data.get("total_steps", 0) > 0:
+                    success_count += 1
+            elif isinstance(traj_data, list) and len(traj_data) > 0:
+                success_count += 1
+        
+        num_groups = len(set(policy_idx // workers_per_group for policy_idx in policy_indices)) if policy_indices else 0
+        
+        if self.expert_trajectories and len(self.expert_trajectories) > 0 and len(self.expert_trajectories[0]) > 0:
+            print(f"[SciWorld Expert] Collected {success_count}/{num_groups} group trajectories")
+            print(f"[SciWorld Expert]   First trajectory: {len(self.expert_trajectories[0])} steps")
+            first_step = self.expert_trajectories[0][0]
+            print(f"[SciWorld Expert]   First action: {first_step.get('action', 'N/A')}")
+            # 显示新格式信息
+            if 'obs' in first_step:
+                print(f"[SciWorld Expert]   Format: obs_before (correct)")
+        
+        return self.expert_trajectories
+    
+    def _truncate_expert_trajectory(self, traj: List[Dict]) -> List[Dict]:
+        """
+        截断 Expert 轨迹，移除任务完成后的重复填充步骤。
+        
+        检测连续重复的动作，这通常表示任务已完成，Expert gold actions 为空，
+        Worker 使用 fallback action (如 "look around") 继续执行。
+        
+        Args:
+            traj: 原始 Expert 轨迹
+            
+        Returns:
+            截断后的轨迹
+        """
+        if len(traj) <= 1:
+            return traj
+        
+        # 找到第一个连续重复动作的位置
+        for i in range(1, len(traj)):
+            current_action = traj[i].get('action', '')
+            prev_action = traj[i - 1].get('action', '')
+            
+            # 检测连续重复（通常是 fallback action 如 "look around"）
+            if current_action == prev_action:
+                # 确认这是填充而非正常重复：检查后续是否都是相同动作
+                is_padding = all(
+                    traj[j].get('action', '') == current_action 
+                    for j in range(i, min(i + 3, len(traj)))
+                )
+                if is_padding:
+                    return traj[:i]
+        
+        return traj
+
+    def get_expert_trajectories(self) -> List[List[Dict]]:
+        """
+        获取当前缓存的 expert 轨迹。
+        
+        Returns:
+            List[List[Dict]]: 每个环境的 expert 轨迹列表（与 AlfWorld 格式一致）
+        """
+        return self.expert_trajectories
+        
+    def get_policy_indices(self):
+        if hasattr(self.envs, 'policy_indices'):
+            return self.envs.policy_indices
+        return list(range(len(self.buffers))) if self.buffers else []
+
+    def get_expert_indices(self):
+        if hasattr(self.envs, 'expert_indices'):
+            return self.envs.expert_indices
+        return []
+
+    def is_expert_in_group_enabled(self):
+        return hasattr(self.envs, 'expert_in_group') and self.envs.expert_in_group
+
+    def extract_task_descriptions(self, infos: List[dict]):
+        for info in infos:
+            if 'task_description' in info:
+                self.tasks.append(info['task_description'])
+            else:
+                self.tasks.append("Unknown task")
+
+    def build_text_obs(self, text_obs: List[str], available_actions: List[List[str]], init: bool = False, history_length: int = 2) -> List[str]:
+        """
+        This function builds the text observation for the agent.
+        """
+        postprocess_text_obs = []
+        if self.meta_think:
+            _SCIWORLD_TEMPLATE_NO_HIS = SCIWORLD_TEMPLATE_NO_HIS_MC
+            _SCIWORLD_TEMPLATE = SCIWORLD_TEMPLATE_MC
+        else:
+            _SCIWORLD_TEMPLATE_NO_HIS = SCIWORLD_TEMPLATE_NO_HIS
+            _SCIWORLD_TEMPLATE = SCIWORLD_TEMPLATE
+
+        for i in range(len(text_obs)):
+            if init or history_length <= 0:
+                obs = _SCIWORLD_TEMPLATE_NO_HIS.format(
+                    task_description=self.tasks[i],
+                    current_observation=text_obs[i],
+                    available_actions=available_actions[i]
+                )
+            else:
+                all_actions = [record["action"] for record in self.buffers[i]]
+                recent_history = self.buffers[i][-history_length:]
+                recent_start_index = len(self.buffers[i]) - history_length
+                valid_history_length = len(recent_history)
+                action_history = ""
+
+                for j in range(recent_start_index):
+                    action = all_actions[j]
+                    step_number = j + 1
+                    action_history += f"\n[Step {step_number}, Action {step_number}: '{action}']"
+
+                for j, record in enumerate(recent_history):
+                    step_number = recent_start_index + j + 1
+                    env_obs = record["text_obs"]
+                    action = record["action"]
+                    action_history += f"\n[Step {step_number}, Observation {step_number}: '{env_obs}', Action {step_number}: '{action}']"
+
+                if self.config is not None and hasattr(self.config.env, 'sciworld') and hasattr(self.config.env.sciworld, 'meta_think') and self.config.env.sciworld.meta_think:
+                    history_think_length = min(3, len(self.buffers[i]))
+                    start_index = len(self.buffers[i]) - history_think_length
+                    action_history += "\n- recent reasoning process: \n" 
+                    for j, record in enumerate(self.buffers[i][-history_think_length:]):
+                        step_number = start_index + j + 1
+                        action_history += f"[Step {step_number}, output {step_number}: '{record['full_output']}']\n"
+
+                    obs = _SCIWORLD_TEMPLATE.format(
+                        task_description=self.tasks[i],
+                        step_count=len(self.buffers[i]),
+                        history_length=valid_history_length,
+                        action_history=action_history.strip(),
+                        current_step=len(self.buffers[i]) + 1,
+                        current_observation=text_obs[i],
+                        planning=self.plannings[i],
+                        available_actions=available_actions[i]
+                    )
+                else:
+                    obs = _SCIWORLD_TEMPLATE.format(
+                        task_description=self.tasks[i],
+                        step_count=len(self.buffers[i]),
+                        history_length=valid_history_length,
+                        action_history=action_history.strip(),
+                        current_step=len(self.buffers[i]) + 1,
+                        current_observation=text_obs[i],
+                        available_actions=available_actions[i]
+                    )
+
+            postprocess_text_obs.append(obs)
+
+        return postprocess_text_obs
+
+    def save_to_history_buffer(self, text_obs, actions, text_actions=None, plannings=None):
+        for i in range(len(actions)):
+            if text_actions:
+                self.buffers[i].append({'text_obs': text_obs[i], 'action': actions[i], 'full_output': text_actions[i]})
+            else:
+                self.buffers[i].append({'text_obs': text_obs[i], 'action': actions[i]})
+
+        if plannings:
+            for i in range(len(plannings)):
+                if plannings[i] is not None:
+                    self.plannings[i] = plannings[i]
+
+    def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+        # Find the last entry with active masks
+        for i in reversed(range(len(total_batch_list[batch_idx]))):
+            batch_item = total_batch_list[batch_idx][i]
+            if batch_item['active_masks']:
+                info = total_infos[batch_idx][i]
+                won_value = float(info['won'])
+                success['success_rate'].append(won_value)
+                return
+
+    def _set_meta_think(self, type: bool):
+        self.meta_think = type
 
 def make_envs(config):
     """
@@ -721,6 +1014,33 @@ def make_envs(config):
         raise ValueError("config.env.rollout.n should be an integer")
     group_n = config.env.rollout.n if config.env.rollout.n > 0 else 1
     resources_per_worker = OmegaConf.to_container(config.env.resources_per_worker, resolve=True)
+
+
+    # 检查是否启用 Expert Worker
+    # 条件：discriminator.enable == True AND discriminator.use_expert == True
+    use_expert_worker = False
+    # 尝试从 config 中获取 discriminator（算法无关）
+    discriminator_cfg = None
+
+    if hasattr(config, 'algorithm'):
+        for algo_cfg in vars(config.algorithm).values():
+            if hasattr(algo_cfg, 'discriminator'):
+                discriminator_cfg = algo_cfg.discriminator
+                break
+
+    if discriminator_cfg is not None:
+        use_expert_worker = (
+            getattr(discriminator_cfg, 'enable', False) is True and
+            getattr(discriminator_cfg, 'use_expert', False) is True
+        )
+
+        if use_expert_worker:
+            print(
+                "[get_envs] Expert Worker enabled: "
+                f"discriminator.enable={discriminator_cfg.enable}, "
+                f"use_expert={discriminator_cfg.use_expert}"
+            )
+
 
     if "search" in config.env.env_name.lower():
         from agent_system.environments.env_package.search import build_search_envs, search_projection
@@ -806,6 +1126,56 @@ def make_envs(config):
         projection_f = partial(appworld_projection)
         envs = AppWorldEnvironmentManager(_envs, projection_f, config)
         val_envs = AppWorldEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "sciworld" in config.env.env_name.lower():
+        from agent_system.environments.env_package.sciworld import build_sciworld_envs, sciworld_projection
+        import json
+        generalization_level = config.env.sciworld['generalization_level']
+
+        if generalization_level == 1:
+            variation_path = 'agent_system/environments/env_package/sciworld/variations_idx/L1_idx.json'
+        elif generalization_level == 0:
+            variation_path = 'agent_system/environments/env_package/sciworld/variations_idx/L0_idx.json'
+
+        with open(variation_path, 'r') as f:
+            variations_idx = json.load(f)
+
+        simplifications_preset = config.env.sciworld.get('simplifications_preset', "easy")
+        env_step_limit = config.env.sciworld.get('env_step_limit', 100)
+        jar_path = config.env.sciworld.get('jar_path', None)
+
+        _envs = build_sciworld_envs(
+            seed=config.env.seed, 
+            env_num=config.data.train_batch_size, 
+            group_n=group_n, 
+            simplifications_preset=simplifications_preset,
+            env_step_limit=env_step_limit,
+            jar_path=jar_path,
+            variations_idx=variations_idx['train'],
+            expert_in_group=use_expert_worker
+        )
+
+        _val_envs = build_sciworld_envs(
+            seed=config.env.seed + 1000, 
+            env_num=config.data.val_batch_size, 
+            group_n=1, 
+            simplifications_preset=simplifications_preset,
+            env_step_limit=env_step_limit,
+            jar_path=jar_path,
+            variations_idx=variations_idx['test']
+        )
+
+        # Create projection function
+        projection_f = partial(sciworld_projection)
+
+        # Create environment managers
+        envs = SciWorldEnvironmentManager(_envs, projection_f, config.env.env_name, config)
+        val_envs = SciWorldEnvironmentManager(_val_envs, projection_f, config.env.env_name, config)
+
+        # Give some time for environments to initialize
+        import time
+        time.sleep((config.data.train_batch_size * group_n + config.data.val_batch_size) * 0.1)
+
         return envs, val_envs
     else:
         print("Environment not supported")

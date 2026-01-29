@@ -497,6 +497,19 @@ class RayPPOTrainer:
         else:
             raise NotImplementedError
 
+        # Initialize Discriminator if enabled
+        self.discriminator = None
+        if hasattr(config.algorithm, 'discriminator') and config.algorithm.discriminator.enable:
+            try:
+                from rlvmr.discriminator_reward import create_discriminator_from_config
+                self.discriminator = create_discriminator_from_config(config)
+                if self.discriminator:
+                    print(f"[Discriminator] Initialized with URLs: {config.algorithm.discriminator.base_urls}")
+            except Exception as e:
+                print(f"[Discriminator] Failed to initialize: {e}")
+                import traceback
+                traceback.print_exc()
+
         self._validate_config()
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
@@ -667,6 +680,52 @@ class RayPPOTrainer:
 
         self.total_training_steps = total_training_steps
         print(f"Total training steps: {self.total_training_steps}")
+
+    def _build_policy_trajectories(self, batch: DataProto) -> list:
+        """
+        从 batch 中构建 policy 轨迹用于 Discriminator 评估。
+        
+        Args:
+            batch: DataProto containing rollout data
+            
+        Returns:
+            List of trajectories, each trajectory is a list of step dicts
+        """
+        trajectories = []
+        batch_size = len(batch.batch['responses'])
+        
+        # 获取 responses 和 decode
+        responses = batch.batch['responses']
+        response_texts = [self.tokenizer.decode(resp, skip_special_tokens=True) for resp in responses]
+        
+        # 获取轨迹 ID 用于分组
+        traj_uids = batch.non_tensor_batch.get('traj_uid', None)
+        
+        if traj_uids is None:
+            # 如果没有轨迹 ID，每个样本作为独立轨迹
+            for i in range(batch_size):
+                traj = [{
+                    "observation": "",
+                    "action": response_texts[i],
+                }]
+                trajectories.append(traj)
+        else:
+            # 按轨迹 ID 分组
+            from collections import defaultdict
+            traj_groups = defaultdict(list)
+            
+            for i in range(batch_size):
+                uid = traj_uids[i]
+                traj_groups[uid].append({
+                    "observation": "",
+                    "action": response_texts[i],
+                })
+            
+            # 转换为列表
+            for uid in traj_groups:
+                trajectories.append(traj_groups[uid])
+        
+        return trajectories
 
         try:
             OmegaConf.set_struct(self.config, True)
@@ -1258,6 +1317,47 @@ class RayPPOTrainer:
 
                         norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)  # GRPO adv normalization factor
 
+                        # ==================== Discriminator Reward Computation ====================
+                        # 在 compute_advantage 之前调用 Discriminator API
+                        hybrid_reward_config = {}
+                        if hasattr(self.config.algorithm, 'hybrid_reward') and self.config.algorithm.hybrid_reward.enable:
+                            hybrid_reward_config = {
+                                'reward_mode': self.config.algorithm.hybrid_reward.reward_mode,
+                                'episode_reward_weight': self.config.algorithm.hybrid_reward.episode_reward_weight,
+                                'step_reward_weight': self.config.algorithm.hybrid_reward.step_reward_weight,
+                            }
+                            
+                            # 如果启用了 Discriminator 且不是纯 grpo 模式
+                            if (hasattr(self, 'discriminator') and self.discriminator is not None 
+                                and hybrid_reward_config.get('reward_mode', 'grpo') != 'grpo'):
+                                try:
+                                    import asyncio
+                                    
+                                    # 从 batch 中构建 policy 轨迹
+                                    policy_trajectories = self._build_policy_trajectories(batch)
+                                    
+                                    # 从 meta_info 获取 expert 轨迹
+                                    expert_trajectories = batch.meta_info.get('expert_trajectories', None)
+                                    
+                                    if policy_trajectories:
+                                        # 调用 Discriminator API
+                                        print(f"[Discriminator] Computing rewards for {len(policy_trajectories)} trajectories...")
+                                        disc_episode_rewards, disc_step_rewards = asyncio.run(
+                                            self.discriminator.compute_rewards(
+                                                policy_trajectories,
+                                                expert_trajectories
+                                            )
+                                        )
+                                        
+                                        # 将结果存入 batch
+                                        batch.batch['disc_episode_rewards'] = torch.from_numpy(disc_episode_rewards).to(batch.batch['token_level_rewards'].device)
+                                        batch.batch['disc_step_rewards'] = torch.from_numpy(disc_step_rewards).to(batch.batch['token_level_rewards'].device)
+                                        print(f"[Discriminator] Rewards computed: episode_mean={disc_episode_rewards.mean():.4f}, step_mean={disc_step_rewards.mean():.4f}")
+                                except Exception as e:
+                                    print(f"[Discriminator] Failed to compute rewards: {e}")
+                                    import traceback
+                                    traceback.print_exc()
+
                         batch = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,
@@ -1273,6 +1373,7 @@ class RayPPOTrainer:
                             gigpo_mode=self.config.algorithm.gigpo.mode,
                             gigpo_enable_similarity= self.config.algorithm.gigpo.enable_similarity,
                             gigpo_similarity_thresh=self.config.algorithm.gigpo.similarity_thresh,
+                            hybrid_reward_config=hybrid_reward_config,
                         )
 
                     # update critic

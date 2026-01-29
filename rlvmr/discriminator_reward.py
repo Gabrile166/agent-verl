@@ -279,12 +279,50 @@ def create_discriminator_from_config(config) -> Optional[DiscriminatorRewardCalc
     """
     disc_cfg = config.algorithm.discriminator
     
-    if not disc_cfg.enable:
+    # 打印配置用于调试
+    print(f"[Discriminator] Config received:")
+    print(f"  enable: {disc_cfg.enable} (type: {type(disc_cfg.enable).__name__})")
+    print(f"  model_name: {disc_cfg.model_name}")
+    print(f"  base_urls: {disc_cfg.base_urls} (type: {type(disc_cfg.base_urls).__name__})")
+    
+    # 检查 enable 是否为有效布尔值
+    enable = disc_cfg.enable
+    if isinstance(enable, str):
+        enable = enable.lower() in ('true', '1', 'yes')
+        print(f"  [WARN] enable was string, converted to: {enable}")
+    
+    if not enable:
+        print(f"[Discriminator] Disabled, skipping initialization")
         return None
+    
+    # 处理 base_urls - 可能是列表、ListConfig 或字符串
+    base_urls = disc_cfg.base_urls
+    if isinstance(base_urls, str):
+        # 尝试解析 JSON 格式 '["url1","url2"]'
+        if base_urls.startswith('[') and base_urls.endswith(']'):
+            try:
+                base_urls = json.loads(base_urls)
+                print(f"  [INFO] base_urls parsed from JSON string: {base_urls}")
+            except json.JSONDecodeError:
+                # 尝试简单分割 '[url1,url2]'
+                base_urls = base_urls[1:-1].split(',')
+                base_urls = [url.strip().strip('"').strip("'") for url in base_urls]
+                print(f"  [INFO] base_urls parsed from bracket string: {base_urls}")
+        else:
+            # 单个 URL 字符串
+            base_urls = [base_urls]
+            print(f"  [INFO] base_urls was single string, wrapped: {base_urls}")
+    else:
+        # ListConfig 或 list
+        base_urls = list(base_urls)
+    
+    print(f"[Discriminator] Creating calculator with:")
+    print(f"  model_name: {disc_cfg.model_name}")
+    print(f"  base_urls: {base_urls}")
     
     return DiscriminatorRewardCalculator(
         DiscriminatorConfig(
-            base_urls=list(disc_cfg.base_urls),
+            base_urls=base_urls,
             api_key=disc_cfg.api_key,
             model_name=disc_cfg.model_name,
             max_concurrency_per_url=disc_cfg.max_concurrency_per_url,
@@ -293,3 +331,4 @@ def create_discriminator_from_config(config) -> Optional[DiscriminatorRewardCalc
             use_expert=disc_cfg.use_expert
         )
     )
+

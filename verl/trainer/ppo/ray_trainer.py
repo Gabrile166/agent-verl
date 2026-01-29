@@ -384,7 +384,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         
         env_step_rewards = safe_get_batch('step_rewards')
         
-        advantages, returns = compute_hybrid_outcome_advantage(
+        advantages, returns, adv_details = compute_hybrid_outcome_advantage(
             token_level_rewards=data.batch['token_level_rewards'],
             response_mask=data.batch['response_mask'],
             index=data.non_tensor_batch['uid'],
@@ -399,6 +399,9 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+        
+        # 可选：记录 episode/step 优势用于 logging
+        # data.meta_info['hybrid_adv_details'] = adv_details
     else:
         raise NotImplementedError
     return data

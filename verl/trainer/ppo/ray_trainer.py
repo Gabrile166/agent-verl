@@ -368,7 +368,12 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         episode_reward_weight = hybrid_cfg.get("episode_reward_weight", 1.0)
         step_reward_weight = hybrid_cfg.get("step_reward_weight", 1.0)
         
-        # Safely get optional fields (TensorDict.get() may raise KeyError)
+        # 从 hybrid_cfg 获取 Discriminator 奖励（由 RayPPOTrainer.fit 计算并存入）
+        # 这些是 sample-level 奖励，而非 token-level
+        disc_episode_rewards = hybrid_cfg.get('disc_episode_rewards', None)
+        disc_step_rewards = hybrid_cfg.get('disc_step_rewards', None)
+        
+        # Safely get env step rewards from batch if available
         def safe_get_batch(key, default=None):
             try:
                 if key in data.batch.keys():
@@ -378,8 +383,6 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             return default
         
         env_step_rewards = safe_get_batch('step_rewards')
-        disc_step_rewards = safe_get_batch('disc_step_rewards')
-        disc_episode_rewards = safe_get_batch('disc_episode_rewards')
         
         advantages, returns = compute_hybrid_outcome_advantage(
             token_level_rewards=data.batch['token_level_rewards'],
@@ -1349,9 +1352,12 @@ class RayPPOTrainer:
                                             )
                                         )
                                         
-                                        # 将结果存入 batch
-                                        batch.batch['disc_episode_rewards'] = torch.from_numpy(disc_episode_rewards).to(batch.batch['token_level_rewards'].device)
-                                        batch.batch['disc_step_rewards'] = torch.from_numpy(disc_step_rewards).to(batch.batch['token_level_rewards'].device)
+                                        # 将结果存入 hybrid_reward_config 而非 batch.batch
+                                        # 因为 TensorDict 要求所有 tensor 维度一致（token-level）
+                                        # 而 disc_*_rewards 是 sample-level
+                                        device = batch.batch['token_level_rewards'].device
+                                        hybrid_reward_config['disc_episode_rewards'] = torch.from_numpy(disc_episode_rewards).float().to(device)
+                                        hybrid_reward_config['disc_step_rewards'] = torch.from_numpy(disc_step_rewards).float().to(device)
                                         print(f"[Discriminator] Rewards computed: episode_mean={disc_episode_rewards.mean():.4f}, step_mean={disc_step_rewards.mean():.4f}")
                                 except Exception as e:
                                     print(f"[Discriminator] Failed to compute rewards: {e}")

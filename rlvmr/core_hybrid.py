@@ -41,19 +41,20 @@ def compute_hybrid_outcome_advantage(
     """
     计算 Hybrid 优势函数，融合环境奖励和 Discriminator 奖励。
     
-    基于 GRPO 的 group-relative normalization，支持三种模式：
-    - "grpo": 仅使用环境奖励（原始 GRPO）
-    - "discriminator": 仅使用 Discriminator 奖励
-    - "hybrid": 加权融合两种奖励
+    支持 Multi-turn Agent 的数据结构：
+    - token_level_rewards: (num_steps, response_length) - step-level 数据
+    - disc_episode_rewards: (num_trajectories,) - trajectory-level 数据
+    
+    通过 traj_index 将 trajectory-level 奖励映射到 step-level。
     
     Args:
-        token_level_rewards: (batch_size, response_length) Token-level rewards from environment
-        response_mask: (batch_size, response_length) Mask for valid tokens
-        index: (batch_size,) Group indices for normalization (uid)
-        traj_index: (batch_size,) Trajectory indices (traj_uid)
-        env_step_rewards: (batch_size,) Step-level rewards from environment (optional)
-        disc_step_rewards: (batch_size,) Step-level rewards from Discriminator (optional)
-        disc_episode_rewards: (batch_size,) Episode-level rewards from Discriminator (optional)
+        token_level_rewards: (num_steps, response_length) Token-level rewards
+        response_mask: (num_steps, response_length) Mask for valid tokens
+        index: (num_steps,) Group indices for normalization (uid)
+        traj_index: (num_steps,) Trajectory indices (traj_uid)
+        env_step_rewards: (num_steps,) Step-level rewards from environment (optional)
+        disc_step_rewards: (num_trajectories,) Discriminator step scores, indexed by traj_uid
+        disc_episode_rewards: (num_trajectories,) Discriminator episode scores, indexed by traj_uid
         epsilon: Small value to avoid division by zero
         episode_reward_weight: Weight for episode-level rewards
         step_reward_weight: Weight for step-level rewards
@@ -61,14 +62,15 @@ def compute_hybrid_outcome_advantage(
         norm_adv_by_std: Whether to normalize by standard deviation
     
     Returns:
-        advantages: (batch_size, response_length) Computed advantages
-        returns: (batch_size, response_length) Computed returns (same as advantages for GRPO-style)
+        advantages: (num_steps, response_length) Computed advantages
+        returns: (num_steps, response_length) Computed returns
     """
     response_length = token_level_rewards.shape[-1]
     device = token_level_rewards.device
+    num_steps = token_level_rewards.shape[0]
     
-    # 计算 episode scores（环境奖励）
-    env_episode_scores = token_level_rewards.sum(dim=-1)  # (batch_size,)
+    # 计算 step-level episode scores（环境奖励）
+    env_episode_scores = token_level_rewards.sum(dim=-1)  # (num_steps,)
     
     if reward_mode == "grpo":
         # 原始 GRPO：仅使用环境奖励
@@ -78,22 +80,28 @@ def compute_hybrid_outcome_advantage(
         # 仅使用 Discriminator 奖励
         if disc_episode_rewards is None:
             raise ValueError("disc_episode_rewards is required for 'discriminator' mode")
-        combined_scores = disc_episode_rewards.to(device)
+        
+        # 将 trajectory-level 奖励映射到 step-level
+        disc_ep_step = _expand_traj_to_step(disc_episode_rewards, traj_index, device)
+        combined_scores = disc_ep_step
         
     elif reward_mode == "hybrid":
         # 混合模式：加权融合
-        disc_ep = disc_episode_rewards.to(device) if disc_episode_rewards is not None else torch.zeros_like(env_episode_scores)
+        if disc_episode_rewards is not None:
+            disc_ep_step = _expand_traj_to_step(disc_episode_rewards, traj_index, device)
+        else:
+            disc_ep_step = torch.zeros_like(env_episode_scores)
         
         # Episode-level 融合
         combined_scores = (
             episode_reward_weight * env_episode_scores + 
-            step_reward_weight * disc_ep
+            step_reward_weight * disc_ep_step
         )
         
-        # 如果有 step-level 奖励，也加入融合
-        if env_step_rewards is not None and disc_step_rewards is not None:
-            disc_st = disc_step_rewards.to(device)
-            step_bonus = step_reward_weight * disc_st
+        # 如果有 step-level Discriminator 奖励，也加入融合
+        if disc_step_rewards is not None:
+            disc_st_step = _expand_traj_to_step(disc_step_rewards, traj_index, device)
+            step_bonus = step_reward_weight * disc_st_step
             combined_scores = combined_scores + step_bonus
     else:
         raise ValueError(f"Unknown reward_mode: {reward_mode}")
@@ -109,6 +117,47 @@ def compute_hybrid_outcome_advantage(
     )
     
     return advantages, advantages
+
+
+def _expand_traj_to_step(
+    traj_rewards: torch.Tensor,
+    traj_index: np.ndarray,
+    device: torch.device
+) -> torch.Tensor:
+    """
+    将 trajectory-level 奖励扩展到 step-level。
+    
+    通过 traj_index 将每个 trajectory 的奖励复制到该 trajectory 的所有 steps。
+    
+    Args:
+        traj_rewards: (num_unique_trajs,) Trajectory-level rewards
+        traj_index: (num_steps,) Trajectory index for each step
+        device: Target device
+    
+    Returns:
+        step_rewards: (num_steps,) Expanded step-level rewards
+    """
+    num_steps = len(traj_index)
+    step_rewards = torch.zeros(num_steps, device=device, dtype=traj_rewards.dtype)
+    
+    # 获取唯一的 traj_uid 及其映射
+    unique_trajs = list(set(traj_index))
+    unique_trajs.sort()  # 保持顺序一致性
+    traj_to_idx = {t: i for i, t in enumerate(unique_trajs)}
+    
+    # 如果 traj_rewards 维度与 unique_trajs 不同，可能需要处理
+    if len(traj_rewards) != len(unique_trajs):
+        # Discriminator 返回的是 per-trajectory 奖励，可能需要取均值
+        # 这里假设 traj_rewards 按照 trajectory 顺序排列
+        print(f"[Hybrid] Warning: traj_rewards={len(traj_rewards)}, unique_trajs={len(unique_trajs)}")
+    
+    for step_i in range(num_steps):
+        traj_uid = traj_index[step_i]
+        traj_idx = traj_to_idx.get(traj_uid, 0)
+        if traj_idx < len(traj_rewards):
+            step_rewards[step_i] = traj_rewards[traj_idx]
+    
+    return step_rewards
 
 
 def _grpo_normalize(

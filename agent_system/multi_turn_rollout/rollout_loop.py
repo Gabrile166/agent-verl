@@ -367,6 +367,9 @@ class TrajectoryCollector:
             
             next_obs, rewards, dones, infos = envs.step(text_actions)
 
+            # 保存完整输出（用于 format_policy_trajectory 提取 action）
+            batch.non_tensor_batch['full_output'] = text_actions
+
             
             if len(rewards.shape) == 2:
                 rewards = rewards.squeeze(1)

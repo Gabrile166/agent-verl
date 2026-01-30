@@ -110,16 +110,32 @@ Examples:
         )
     
     def _format_trajectory(self, trajectory: List[Dict]) -> str:
-        """格式化轨迹为可读字符串"""
+        """格式化轨迹为 JSON 字符串"""
         if not trajectory:
-            return "Empty trajectory"
+            return "[]"
         
-        lines = []
-        for i, step in enumerate(trajectory):
-            obs = step.get("observation", "")
-            action = step.get("action", "")
-            lines.append(f"Step {i+1}: Action='{action}', Obs='{obs[:100]}...'")
-        return "\n".join(lines)
+        # 确保 JSON 序列化时的字段顺序: observation -> action
+        # 虽然 JSON 是无序的，但为了 Prompt 可读性，我们手动重构一下字典顺序
+        ordered_traj = []
+        for step in trajectory:
+            ordered_step = {}
+            # 优先放入 observation
+            if 'observation' in step:
+                ordered_step['observation'] = step['observation']
+            elif 'obs' in step:
+                ordered_step['observation'] = step['obs']
+                
+            # 然后放入 action
+            if 'action' in step:
+                ordered_step['action'] = step['action']
+                
+            # 放入其他字段 (如 reason)
+            for k, v in step.items():
+                if k not in ['observation', 'obs', 'action']:
+                    ordered_step[k] = v
+            ordered_traj.append(ordered_step)
+            
+        return json.dumps(ordered_traj, ensure_ascii=False)
     
     def parse_response(self, response: str) -> Tuple[float, List[float]]:
         """解析 JSON 响应"""

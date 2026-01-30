@@ -1082,30 +1082,34 @@ def make_envs(config):
 
 
     # 检查是否启用 Expert Worker
-    # 条件：discriminator.enable == True AND discriminator.use_expert == True
+    # 优先检查 algorithm.expert (新配置), 其次检查 discriminator.use_expert (遗留配置)
     use_expert_worker = False
-    # 尝试从 config 中获取 discriminator（算法无关）
-    discriminator_cfg = None
+    workers_per_group_arg = None
+    
+    # 1. Check algorithm.expert
+    if hasattr(config, 'algorithm') and hasattr(config.algorithm, 'expert'):
+        expert_cfg = config.algorithm.expert
+        if getattr(expert_cfg, 'enable', False):
+            use_expert_worker = True
+            workers_per_group_arg = getattr(expert_cfg, 'workers_per_group', None)
+            print(f"[get_envs] Expert Worker enabled via algorithm.expert: workers_per_group={workers_per_group_arg}")
 
-    if hasattr(config, 'algorithm'):
-        for algo_cfg in vars(config.algorithm).values():
-            if hasattr(algo_cfg, 'discriminator'):
-                discriminator_cfg = algo_cfg.discriminator
-                break
-
-    if discriminator_cfg is not None:
-        use_expert_worker = (
-            getattr(discriminator_cfg, 'enable', False) is True and
-            getattr(discriminator_cfg, 'use_expert', False) is True
-        )
-
-        if use_expert_worker:
-            print(
-                "[get_envs] Expert Worker enabled: "
-                f"discriminator.enable={discriminator_cfg.enable}, "
-                f"use_expert={discriminator_cfg.use_expert}"
+    # 2. Check discriminator config (Backward Compatibility)
+    if not use_expert_worker:
+        discriminator_cfg = None
+        if hasattr(config, 'algorithm'):
+            for algo_cfg in vars(config.algorithm).values():
+                if hasattr(algo_cfg, 'discriminator'):
+                    discriminator_cfg = algo_cfg.discriminator
+                    break
+    
+        if discriminator_cfg is not None:
+            use_expert_worker = (
+                getattr(discriminator_cfg, 'enable', False) is True and
+                getattr(discriminator_cfg, 'use_expert', False) is True
             )
-
+            if use_expert_worker:
+                print(f"[get_envs] Expert Worker enabled via discriminator config")
 
     if "search" in config.env.env_name.lower():
         from agent_system.environments.env_package.search import build_search_envs, search_projection
@@ -1137,7 +1141,7 @@ def make_envs(config):
         env_kwargs = {
             'eval_dataset': config.env.alfworld.eval_dataset, # 'eval_in_distribution' or 'eval_out_of_distribution'
         }
-        _envs = build_alfworld_envs(alf_config_path, config.env.seed, config.data.train_batch_size, group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
+        _envs = build_alfworld_envs(alf_config_path, config.env.seed, config.data.train_batch_size, group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker, expert_in_group=use_expert_worker)
         _val_envs = build_alfworld_envs(alf_config_path, config.env.seed + 1000, config.data.val_batch_size, 1, is_train=False, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
         
         projection_f = partial(alfworld_projection)

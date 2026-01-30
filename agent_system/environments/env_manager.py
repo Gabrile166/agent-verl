@@ -281,7 +281,10 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                     
                     # 获取该组的 Expert 轨迹
                     traj = expert_trajs_dict.get(group_idx, [])
-                    mapped_trajectories.append(traj)
+                    
+                    # 关键修复：截断 Trajectory，移除尾部的 Padding ("look" actions)
+                    truncated_traj = self._truncate_expert_trajectory(traj)
+                    mapped_trajectories.append(truncated_traj)
                 else:
                     mapped_trajectories.append([])
         else:
@@ -289,6 +292,39 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
             mapped_trajectories = [[] for _ in range(len(self.tasks))]
             
         return mapped_trajectories
+    
+    def _truncate_expert_trajectory(self, traj: List[Dict]) -> List[Dict]:
+        """
+        截断 Expert 轨迹，移除任务完成后的重复填充步骤。
+        
+        检测连续重复的动作，这通常表示任务已完成，Expert plan 为空，
+        Worker 使用 fallback action 继续执行。
+        
+        Args:
+            traj: 原始 Expert 轨迹
+            
+        Returns:
+            截断后的轨迹
+        """
+        if len(traj) <= 1:
+            return traj
+        
+        # 找到第一个连续重复动作的位置
+        for i in range(1, len(traj)):
+            current_action = traj[i].get('action', '')
+            prev_action = traj[i - 1].get('action', '')
+            
+            # 检测连续重复（通常是 fallback action 如 "look"）
+            if current_action == prev_action:
+                # 确认这是填充而非正常重复：检查后续是否都是相同动作
+                is_padding = all(
+                    traj[j].get('action', '') == current_action 
+                    for j in range(i, min(i + 3, len(traj)))
+                )
+                if is_padding:
+                    return traj[:i]
+        
+        return traj
     
     def collect_expert_from_info(self, info: Dict) -> List[Dict]:
         """

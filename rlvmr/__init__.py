@@ -16,6 +16,7 @@ from rlvmr.expert_trajectory import (
     create_expert_generator_from_config,
     register_expert_generator,
 )
+from rlvmr.trajectory_saver import TrajectorySaver
 
 __all__ = [
     "DiscriminatorRewardCalculator",
@@ -28,4 +29,5 @@ __all__ = [
     "create_expert_generator",
     "create_expert_generator_from_config",
     "register_expert_generator",
+    "TrajectorySaver",
 ]

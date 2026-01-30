@@ -516,6 +516,20 @@ class RayPPOTrainer:
                 import traceback
                 traceback.print_exc()
 
+        # Initialize TrajectorySaver if enabled
+        self.trajectory_saver = None
+        if hasattr(config.algorithm, 'trajectory_save') and config.algorithm.trajectory_save.enable:
+            try:
+                from rlvmr.trajectory_saver import TrajectorySaver
+                output_dir = config.algorithm.trajectory_save.output_dir
+                if output_dir:
+                    self.trajectory_saver = TrajectorySaver(output_dir=output_dir, enabled=True)
+                    print(f"[TrajectorySaver] Initialized with output_dir: {output_dir}")
+            except Exception as e:
+                print(f"[TrajectorySaver] Failed to initialize: {e}")
+                import traceback
+                traceback.print_exc()
+
         self._validate_config()
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 

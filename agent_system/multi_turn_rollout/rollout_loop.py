@@ -27,7 +27,7 @@ from typing import List, Dict
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 
 class TrajectoryCollector:
-    def __init__(self, config, tokenizer: PreTrainedTokenizer, processor=None):
+    def __init__(self, config, tokenizer: PreTrainedTokenizer, processor=None, trajectory_saver=None):
         """
         Initialize the TrajectoryProcessor class.
         
@@ -35,10 +35,13 @@ class TrajectoryCollector:
             config: Configuration object containing data processing settings
             tokenizer (PreTrainedTokenizer): Tokenizer for text encoding and decoding
             processor: Image processor for multimodal inputs
+            trajectory_saver: Optional TrajectorySaver instance for saving rollout data
         """
         self.config = config
         self.tokenizer = tokenizer
         self.processor = processor
+        self.trajectory_saver = trajectory_saver
+        self._batch_count = 0
 
     def preprocess_single_sample(
         self,
@@ -578,5 +581,23 @@ class TrajectoryCollector:
         # Store expert trajectories in meta_info (for Hybrid Reward calculation)
         gen_batch_output.meta_info["expert_trajectories"] = expert_trajectories
         gen_batch_output.meta_info["tasks"] = tasks
+        
+        # Save trajectories to disk if saver is enabled
+        if self.trajectory_saver is not None and is_train:
+            try:
+                rollout_n = self.config.env.rollout.n if hasattr(self.config.env.rollout, 'n') else 1
+                self.trajectory_saver.save_batch(
+                    batch_id=self._batch_count,
+                    trajectory_list=total_batch_list,
+                    episode_rewards=total_episode_rewards,
+                    expert_trajectories=expert_trajectories,
+                    tasks=tasks,
+                    traj_uids=total_traj_uid,
+                    rollout_n=rollout_n,
+                    global_step=self._batch_count,
+                )
+                self._batch_count += 1
+            except Exception as e:
+                print(f"[TrajectorySaver] Failed to save batch: {e}")
         
         return gen_batch_output

@@ -429,10 +429,23 @@ class TrajectoryCollector:
             policy_indices = envs.get_policy_indices()
             expert_indices = envs.get_expert_indices()
             
-            # Check if data is already filtered by the environment (e.g. AlfworldEnvs)
-            # If batch size matches policy count, no need to filter again via indices
-            if len(total_batch_list) == len(policy_indices):
-                print(f"[Rollout] Data already filtered by environment (size matches policy count: {len(policy_indices)}). Skipping re-filtering.")
+            # 关键判断：检查环境是否已经内部过滤了数据
+            # agent-verl 的 AlfworldEnvs.step/reset 会返回 Policy-only 数据（已过滤）
+            # Agent-PRM 的 AlfworldEnvs.step/reset 返回所有数据（未过滤）
+            # 
+            # 判断依据：如果 batch_size == policy 数量，说明已过滤；
+            #          如果 batch_size == total 数量 (policy + expert)，说明未过滤
+            #
+            # policy_indices 的 LENGTH 等于 policy 数量
+            # 但 policy_indices 的 VALUES 是原始索引 (0,1,2,...,7, 9,10,...)，最大值 > batch_size
+            #
+            # 因此：检查 max(policy_indices) < len(total_batch_list) 来判断是否需要过滤
+            
+            needs_filtering = len(total_batch_list) > len(policy_indices) and max(policy_indices) < len(total_batch_list)
+            
+            if not needs_filtering:
+                print(f"[Rollout] Data already filtered by environment (batch_size={len(total_batch_list)}, "
+                      f"policy_count={len(policy_indices)}). Skipping re-filtering.")
             else:
                 print(f"[Rollout] Filtering Expert Workers: keeping {len(policy_indices)} policy envs, "
                       f"removing {len(expert_indices)} expert envs")

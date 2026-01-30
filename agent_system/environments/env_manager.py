@@ -213,6 +213,7 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
 
     def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
         # Find the last entry with active masks
+        found_active = False
         for i in reversed(range(len(total_batch_list[batch_idx]))):
             batch_item = total_batch_list[batch_idx][i]
             if batch_item['active_masks']:
@@ -224,7 +225,12 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
                 gamefile = info.get("extra.gamefile")
                 if gamefile:
                     self._process_gamefile(gamefile, won_value, success)
+                found_active = True
                 return  # Exit after finding the first active mask
+        
+        # Robustness fix: If no active mask found (e.g. empty trajectory), append 0.0 to maintain alignment
+        if not found_active:
+             success['success_rate'].append(0.0)
 
     def _process_gamefile(self, gamefile, won_value, success):
         tasks = [
@@ -387,6 +393,10 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         Returns:
             List of indices for policy workers (excluding expert workers)
         """
+        # 优先从环境实例获取真实索引
+        if hasattr(self.envs, 'policy_indices'):
+            return self.envs.policy_indices
+
         if not self.is_expert_in_group_enabled():
             # 未启用 Expert 模式，所有 worker 都是 policy
             return list(range(len(self.tasks)))

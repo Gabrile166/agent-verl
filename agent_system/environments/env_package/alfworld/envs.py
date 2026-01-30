@@ -65,12 +65,16 @@ class AlfworldWorker:
         # Expert Worker 专用状态
         self.current_expert_plan = []
         self.expert_trajectory = []
+        self.last_obs = ""  # 用于记录执行动作前的观测
     
     def step(self, action):
         """Execute a step in the environment"""
+        # 保存当前观测（动作执行前的状态）
+        pre_action_obs = self.last_obs
+        
         if self.is_expert:
             # Expert 模式：使用 expert plan 中的下一个动作
-            # 优先使用 infos 中更新的 plan，如果没有则使用缓存的
+            # 优先使用缓存的 plan
             if self.current_expert_plan:
                 action = self.current_expert_plan[0]
             else:
@@ -84,6 +88,10 @@ class AlfworldWorker:
         infos['observation_text'] = obs
         infos['is_expert'] = self.is_expert
         
+        # 更新 last_obs 为当前观测（用于下一步）
+        current_obs = obs[0] if isinstance(obs, (list, tuple)) else str(obs)
+        self.last_obs = current_obs
+        
         if self.is_expert:
             # 记录 Expert 执行的动作
             infos['expert_executed_action'] = action
@@ -93,10 +101,9 @@ class AlfworldWorker:
             batch_plan = infos.get('extra.expert_plan', [])
             self.current_expert_plan = batch_plan[0] if batch_plan else []
             
-            # 累积轨迹
-            current_obs = obs[0] if isinstance(obs, (list, tuple)) else str(obs)
+            # 累积轨迹：记录执行动作**前**的观测（与 Policy 轨迹格式一致）
             self.expert_trajectory.append({
-                "observation": current_obs,
+                "observation": pre_action_obs,  # 动作执行前的观测
                 "action": action
             })
             infos['expert_trajectory'] = self.expert_trajectory
@@ -108,6 +115,10 @@ class AlfworldWorker:
         obs, infos = self.env.reset()
         infos['observation_text'] = obs
         infos['is_expert'] = self.is_expert
+        
+        # 初始化 last_obs 为 reset 后的初始观测
+        initial_obs = obs[0] if isinstance(obs, (list, tuple)) else str(obs)
+        self.last_obs = initial_obs
         
         if self.is_expert:
             self.expert_trajectory = []

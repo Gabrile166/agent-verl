@@ -1379,8 +1379,13 @@ class RayPPOTrainer:
                                 try:
                                     import asyncio
                                     
-                                    # 从 batch 中构建 policy 轨迹
-                                    policy_trajectories = self._build_policy_trajectories(batch)
+                                    # 优先使用 rollout_loop 预格式化的轨迹（避免从扁平 batch 重建时数据损坏）
+                                    policy_trajectories = batch.meta_info.get('formatted_policy_trajectories', None)
+                                    
+                                    if not policy_trajectories:
+                                        # 回退：从 batch 重建（不推荐，可能有数据错位问题）
+                                        print("[Discriminator] WARNING: Using _build_policy_trajectories fallback (may have data alignment issues)")
+                                        policy_trajectories = self._build_policy_trajectories(batch)
                                     
                                     # 从 meta_info 获取 expert 轨迹
                                     expert_trajectories = batch.meta_info.get('expert_trajectories', None)

@@ -466,6 +466,21 @@ class TrajectoryCollector:
                 # 过滤 tasks
                 if tasks:
                     tasks = [tasks[i] for i in policy_indices if i < len(tasks)]
+            
+            # ==================== Expert Trajectory Remapping ====================
+            # 无论是否 needs_filtering，都需要重新映射 expert_trajectories
+            # 因为 expert_trajectories 是 {group_idx: trajectory} 格式
+            # 需要转换为 List[List[Dict]] 与 policy 轨迹一一对应
+            if expert_trajectories and isinstance(expert_trajectories, dict):
+                workers_per_group = getattr(envs.envs, 'workers_per_group', 
+                                           self.config.env.rollout.n + 1 if hasattr(self.config.env, 'rollout') else 2)
+                remapped_expert_trajs = []
+                for policy_idx in policy_indices:
+                    group_idx = policy_idx // workers_per_group
+                    traj = expert_trajectories.get(group_idx, [])
+                    remapped_expert_trajs.append(traj)
+                expert_trajectories = remapped_expert_trajs
+                print(f"[Rollout] Remapped {len(remapped_expert_trajs)} expert trajectories to policy indices")
         
         return total_batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings, expert_trajectories, tasks
     
@@ -599,6 +614,24 @@ class TrajectoryCollector:
         # Store expert trajectories in meta_info (for Hybrid Reward calculation)
         gen_batch_output.meta_info["expert_trajectories"] = expert_trajectories
         gen_batch_output.meta_info["tasks"] = tasks
+        
+        # ==================== Format Policy Trajectories ====================
+        # 直接在这里格式化 Policy 轨迹，避免后续从扁平化 batch 重建时数据损坏
+        # 这保证了 observation 和 action 的正确对应关系
+        try:
+            from rlvmr.discriminator_reward import format_policy_trajectory
+            
+            formatted_policy_trajectories = []
+            for traj_idx, trajectory in enumerate(total_batch_list):
+                task = tasks[traj_idx] if traj_idx < len(tasks) else ''
+                formatted_traj = format_policy_trajectory(trajectory, task)
+                formatted_policy_trajectories.append(formatted_traj)
+            
+            gen_batch_output.meta_info["formatted_policy_trajectories"] = formatted_policy_trajectories
+            print(f"[Rollout] Formatted {len(formatted_policy_trajectories)} policy trajectories directly from trajectory_list")
+        except Exception as e:
+            print(f"[Rollout] Failed to format policy trajectories: {e}")
+            gen_batch_output.meta_info["formatted_policy_trajectories"] = []
         
         # Save trajectories to disk if saver is enabled
         if self.trajectory_saver is not None and is_train:

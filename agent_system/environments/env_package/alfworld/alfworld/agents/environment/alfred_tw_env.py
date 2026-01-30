@@ -125,7 +125,7 @@ class AlfredTWEnv(object):
             print(colored(msg, "yellow"))
 
         self.collect_game_files()
-        self.use_expert = False
+        self.use_expert = True
         print(f"use_expert = {self.use_expert}")
     def collect_game_files(self, verbose=False):
         def log(info):
@@ -240,6 +240,91 @@ class AlfredTWEnv(object):
             print("Unsolvable: %s (%s)" % (str(e), game_file_path))
             return None
 
+        return trajectory
+
+    def generate_expert_trajectory(self, env, game_file_path, max_steps=150):
+        """
+        生成一条完整的 expert 轨迹，包含 observation 和 action 对。
+        
+        使用 handcoded expert agent 执行动作，收集完整的 (observation, action) 序列。
+        这个轨迹用于后续 discriminator 模型评估策略模型的表现。
+        
+        Args:
+            env: 已包装 AlfredExpert 的环境实例
+            game_file_path: 游戏文件路径
+            max_steps: 最大步数限制，防止无限循环
+            
+        Returns:
+            List[Dict]: 完整的 expert 轨迹，格式为:
+                [{"observation": str, "action": str}, ...]
+            如果生成失败返回空列表
+        """
+        trajectory = []
+        done = False
+        steps = 0
+        
+        try:
+            env.load(game_file_path)
+            
+            # Handle Gym reset return logic
+            reset_result = env.reset()
+            if isinstance(reset_result, tuple):
+                obs, info = reset_result
+            else:
+                obs = reset_result
+                info = {}
+            
+            # 提取初始观测
+            initial_obs = obs if isinstance(obs, str) else str(obs)
+            
+            while not done and steps < max_steps:
+                # 获取 expert 推荐的动作
+                expert_plan = info.get('extra.expert_plan', [])
+                
+                if not expert_plan:
+                    break
+                    
+                expert_action = expert_plan[0]
+                
+                # 检查动作是否在允许列表中
+                admissible = info.get("admissible_commands", [])
+                if admissible and expert_action not in admissible:
+                     if "look" in admissible:
+                        expert_action = "look"
+                     else:
+                        break
+                
+                # 记录当前 observation 和将要执行的 action
+                current_obs = obs if isinstance(obs, str) else str(obs)
+                
+                trajectory.append({
+                    "observation": current_obs,
+                    "action": expert_action
+                })
+                
+                # 执行动作
+                step_result = env.step(expert_action)
+                
+                # Handle Gym step return logic (4 or 5 values)
+                if len(step_result) == 5:
+                    obs, reward, terminated, truncated, info = step_result
+                    done = terminated or truncated
+                elif len(step_result) == 4:
+                    obs, reward, done, info = step_result
+                else:
+                    raise ValueError(f"Unexpected step result length: {len(step_result)}")
+                
+                steps += 1
+                
+                if info.get("won", False):
+                    break
+                    
+        except Exception as e:
+            print(f"[Expert Trajectory] Generation failed for {game_file_path}: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+        
         return trajectory
 
     def init_env(self, batch_size):

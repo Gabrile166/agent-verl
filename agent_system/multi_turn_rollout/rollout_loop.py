@@ -429,25 +429,30 @@ class TrajectoryCollector:
             policy_indices = envs.get_policy_indices()
             expert_indices = envs.get_expert_indices()
             
-            print(f"[Rollout] Filtering Expert Workers: keeping {len(policy_indices)} policy envs, "
-                  f"removing {len(expert_indices)} expert envs")
-            
-            # 只保留 Policy Workers 的轨迹
-            total_batch_list = [total_batch_list[i] for i in policy_indices]
-            episode_rewards = np.array([episode_rewards[i] for i in policy_indices])
-            episode_lengths = np.array([episode_lengths[i] for i in policy_indices])
-            traj_uid = np.array([traj_uid[i] for i in policy_indices])
-            tool_callings = np.array([tool_callings[i] for i in policy_indices])
-            
-            # 过滤 success 字典
-            if success:
-                for key in success:
-                    if isinstance(success[key], np.ndarray):
-                        success[key] = np.array([success[key][i] for i in policy_indices])
-            
-            # 过滤 tasks
-            if tasks:
-                tasks = [tasks[i] for i in policy_indices if i < len(tasks)]
+            # Check if data is already filtered by the environment (e.g. AlfworldEnvs)
+            # If batch size matches policy count, no need to filter again via indices
+            if len(total_batch_list) == len(policy_indices):
+                print(f"[Rollout] Data already filtered by environment (size matches policy count: {len(policy_indices)}). Skipping re-filtering.")
+            else:
+                print(f"[Rollout] Filtering Expert Workers: keeping {len(policy_indices)} policy envs, "
+                      f"removing {len(expert_indices)} expert envs")
+                
+                # 只保留 Policy Workers 的轨迹
+                total_batch_list = [total_batch_list[i] for i in policy_indices]
+                episode_rewards = np.array([episode_rewards[i] for i in policy_indices])
+                episode_lengths = np.array([episode_lengths[i] for i in policy_indices])
+                traj_uid = np.array([traj_uid[i] for i in policy_indices])
+                tool_callings = np.array([tool_callings[i] for i in policy_indices])
+                
+                # 过滤 success 字典
+                if success:
+                    for key in success:
+                        if isinstance(success[key], np.ndarray):
+                            success[key] = np.array([success[key][i] for i in policy_indices])
+                
+                # 过滤 tasks
+                if tasks:
+                    tasks = [tasks[i] for i in policy_indices if i < len(tasks)]
         
         return total_batch_list, episode_rewards, episode_lengths, success, traj_uid, tool_callings, expert_trajectories, tasks
     

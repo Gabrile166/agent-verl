@@ -357,6 +357,10 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
         Returns:
             True if N+1 architecture is enabled
         """
+        # 优先检查环境实例的标志位 (因为 val_envs 可能禁用了 expert，即使全局 config 启用了)
+        if hasattr(self.envs, 'expert_in_group'):
+            return self.envs.expert_in_group
+            
         if hasattr(self.config, 'algorithm') and hasattr(self.config.algorithm, 'expert'):
             return self.config.algorithm.expert.get('enable', False)
         return False

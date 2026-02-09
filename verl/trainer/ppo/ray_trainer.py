@@ -95,6 +95,7 @@ class AdvantageEstimator(str, Enum):
     GRPO_PASSK = "grpo_passk"
     GiGPO = 'gigpo'
     HybridGRPO = 'hybrid_grpo'  # Hybrid GRPO with Discriminator rewards
+    MilestoneGAE = 'milestone_gae'  # Milestone-Guided GAE with LLM Judge
 
 
 @dataclass
@@ -402,6 +403,31 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         
         # 可选：记录 episode/step 优势用于 logging
         # data.meta_info['hybrid_adv_details'] = adv_details
+    elif adv_estimator == AdvantageEstimator.MilestoneGAE:
+        # Milestone-Guided GAE with LLM Judge
+        from rlvmr.core_milestone_gae import compute_milestone_gae_from_batch
+        
+        # Get milestone GAE config
+        milestone_cfg = kwargs.get("milestone_gae_config", {})
+        gamma = milestone_cfg.get("gamma", 0.99)
+        lam = milestone_cfg.get("lambda", 0.95)
+        cost = milestone_cfg.get("cost", 0.01)
+        
+        # 从 kwargs 获取预计算的 phis (由 RayPPOTrainer.fit 中的 Judge 计算)
+        phis_list = milestone_cfg.get("phis_list", [])
+        
+        advantages, returns, adv_details = compute_milestone_gae_from_batch(
+            batch_data=data,
+            phis_list=phis_list,
+            traj_index=data.non_tensor_batch['traj_uid'],
+            response_mask=data.batch['response_mask'],
+            gamma=gamma,
+            lam=lam,
+            cost=cost,
+            norm_adv_by_std=norm_adv_by_std_in_grpo,
+        )
+        data.batch['advantages'] = advantages
+        data.batch['returns'] = returns
     else:
         raise NotImplementedError
     return data

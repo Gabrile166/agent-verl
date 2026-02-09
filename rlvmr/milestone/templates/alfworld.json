@@ -1,0 +1,325 @@
+{
+  "env_name": "alfworld",
+  "description": "ALFWorld household task milestones",
+  "task_patterns": {
+    "put_clean": {
+      "pattern": "put.*clean.*(in|on)",
+      "milestones": [
+        {
+          "id": "M1",
+          "name": "找到目标物品",
+          "phi": 0.15,
+          "criteria": "观察文本中出现了目标物品",
+          "keywords": [
+            "see",
+            "find",
+            "observe"
+          ]
+        },
+        {
+          "id": "M2",
+          "name": "拿起目标物品",
+          "phi": 0.30,
+          "criteria": "执行了 take 动作且确认 pick up 成功",
+          "keywords": [
+            "pick up",
+            "take"
+          ]
+        },
+        {
+          "id": "M3",
+          "name": "到达清洗工具",
+          "phi": 0.45,
+          "criteria": "当前位置包含 sinkbasin",
+          "keywords": [
+            "sinkbasin",
+            "sink"
+          ]
+        },
+        {
+          "id": "M4",
+          "name": "完成清洗",
+          "phi": 0.60,
+          "criteria": "执行了 clean 动作且确认清洗成功",
+          "keywords": [
+            "clean",
+            "wash"
+          ]
+        },
+        {
+          "id": "M5",
+          "name": "到达目的地",
+          "phi": 0.80,
+          "criteria": "当前位置是目标放置地点",
+          "keywords": [
+            "shelf",
+            "cabinet",
+            "countertop"
+          ]
+        },
+        {
+          "id": "M6",
+          "name": "放置完成",
+          "phi": 1.00,
+          "criteria": "执行了 put 动作且确认放置成功",
+          "keywords": [
+            "put",
+            "place"
+          ]
+        }
+      ]
+    },
+    "put_heat": {
+      "pattern": "put.*heat.*(in|on)",
+      "milestones": [
+        {
+          "id": "M1",
+          "name": "找到目标物品",
+          "phi": 0.15,
+          "criteria": "观察中出现目标物品",
+          "keywords": [
+            "see",
+            "find"
+          ]
+        },
+        {
+          "id": "M2",
+          "name": "拿起目标物品",
+          "phi": 0.30,
+          "criteria": "成功拾取",
+          "keywords": [
+            "pick up"
+          ]
+        },
+        {
+          "id": "M3",
+          "name": "到达加热工具",
+          "phi": 0.45,
+          "criteria": "位于 microwave",
+          "keywords": [
+            "microwave"
+          ]
+        },
+        {
+          "id": "M4",
+          "name": "完成加热",
+          "phi": 0.60,
+          "criteria": "成功加热",
+          "keywords": [
+            "heat"
+          ]
+        },
+        {
+          "id": "M5",
+          "name": "到达目的地",
+          "phi": 0.80,
+          "criteria": "位于目标位置",
+          "keywords": [
+            "shelf",
+            "cabinet"
+          ]
+        },
+        {
+          "id": "M6",
+          "name": "放置完成",
+          "phi": 1.00,
+          "criteria": "成功放置",
+          "keywords": [
+            "put"
+          ]
+        }
+      ]
+    },
+    "put_cool": {
+      "pattern": "put.*cool.*(in|on)",
+      "milestones": [
+        {
+          "id": "M1",
+          "name": "找到目标物品",
+          "phi": 0.15,
+          "criteria": "观察中出现目标物品",
+          "keywords": [
+            "see",
+            "find"
+          ]
+        },
+        {
+          "id": "M2",
+          "name": "拿起目标物品",
+          "phi": 0.30,
+          "criteria": "成功拾取",
+          "keywords": [
+            "pick up"
+          ]
+        },
+        {
+          "id": "M3",
+          "name": "到达冷却工具",
+          "phi": 0.45,
+          "criteria": "位于 fridge",
+          "keywords": [
+            "fridge"
+          ]
+        },
+        {
+          "id": "M4",
+          "name": "完成冷却",
+          "phi": 0.60,
+          "criteria": "成功冷却",
+          "keywords": [
+            "cool"
+          ]
+        },
+        {
+          "id": "M5",
+          "name": "到达目的地",
+          "phi": 0.80,
+          "criteria": "位于目标位置",
+          "keywords": [
+            "shelf",
+            "cabinet"
+          ]
+        },
+        {
+          "id": "M6",
+          "name": "放置完成",
+          "phi": 1.00,
+          "criteria": "成功放置",
+          "keywords": [
+            "put"
+          ]
+        }
+      ]
+    },
+    "examine": {
+      "pattern": "examine.*with.*lamp",
+      "milestones": [
+        {
+          "id": "M1",
+          "name": "找到目标物品",
+          "phi": 0.20,
+          "criteria": "观察中出现目标物品",
+          "keywords": [
+            "see",
+            "find"
+          ]
+        },
+        {
+          "id": "M2",
+          "name": "拿起目标物品",
+          "phi": 0.40,
+          "criteria": "成功拾取",
+          "keywords": [
+            "pick up"
+          ]
+        },
+        {
+          "id": "M3",
+          "name": "找到台灯",
+          "phi": 0.60,
+          "criteria": "位于台灯附近",
+          "keywords": [
+            "desklamp",
+            "lamp"
+          ]
+        },
+        {
+          "id": "M4",
+          "name": "使用台灯",
+          "phi": 0.80,
+          "criteria": "打开台灯",
+          "keywords": [
+            "use"
+          ]
+        },
+        {
+          "id": "M5",
+          "name": "检查完成",
+          "phi": 1.00,
+          "criteria": "成功检查",
+          "keywords": [
+            "examine"
+          ]
+        }
+      ]
+    },
+    "pick_and_place": {
+      "pattern": "put.*(in|on)",
+      "milestones": [
+        {
+          "id": "M1",
+          "name": "找到目标物品",
+          "phi": 0.25,
+          "criteria": "观察中出现目标物品",
+          "keywords": [
+            "see",
+            "find"
+          ]
+        },
+        {
+          "id": "M2",
+          "name": "拿起目标物品",
+          "phi": 0.50,
+          "criteria": "成功拾取",
+          "keywords": [
+            "pick up"
+          ]
+        },
+        {
+          "id": "M3",
+          "name": "到达目的地",
+          "phi": 0.75,
+          "criteria": "位于目标位置",
+          "keywords": [
+            "shelf",
+            "cabinet",
+            "desk"
+          ]
+        },
+        {
+          "id": "M4",
+          "name": "放置完成",
+          "phi": 1.00,
+          "criteria": "成功放置",
+          "keywords": [
+            "put"
+          ]
+        }
+      ]
+    }
+  },
+  "default_milestones": [
+    {
+      "id": "M1",
+      "name": "开始执行",
+      "phi": 0.25,
+      "criteria": "执行了有意义的动作",
+      "keywords": [
+        "go",
+        "take",
+        "open"
+      ]
+    },
+    {
+      "id": "M2",
+      "name": "中间进展",
+      "phi": 0.50,
+      "criteria": "接近目标",
+      "keywords": []
+    },
+    {
+      "id": "M3",
+      "name": "接近完成",
+      "phi": 0.75,
+      "criteria": "即将完成",
+      "keywords": []
+    },
+    {
+      "id": "M4",
+      "name": "任务完成",
+      "phi": 1.00,
+      "criteria": "任务成功",
+      "keywords": []
+    }
+  ]
+}

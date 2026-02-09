@@ -67,6 +67,20 @@ class MilestoneJudge:
         for m in milestones:
             self.milestone_to_phi[m["id"]] = m["phi"]
     
+    def set_milestones(self, milestones: List[Dict[str, Any]]):
+        """
+        动态设置里程碑列表（用于支持 LLM 生成的里程碑）
+        
+        Args:
+            milestones: 里程碑列表，每个元素包含 id, name, phi, criteria
+        """
+        self.milestones = milestones
+        
+        # 重建映射
+        self.milestone_to_phi = {"M0": 0.0}
+        for m in milestones:
+            self.milestone_to_phi[m["id"]] = m["phi"]
+    
     def _build_prompt(
         self,
         task_description: str,
@@ -232,12 +246,13 @@ def create_milestone_judge_from_config(config) -> Optional[MilestoneJudge]:
         milestone_cfg = config.algorithm.milestone_gae
         judge_cfg = milestone_cfg.judge_llm
         
-        # 加载里程碑模板
+        # 加载里程碑模板（支持 fallback_template 或旧的 milestone_template）
         from .templates import load_milestone_template
-        template_name = milestone_cfg.get("milestone_template", "alfworld")
+        template_name = milestone_cfg.get("fallback_template", 
+                                          milestone_cfg.get("milestone_template", "alfworld"))
         template = load_milestone_template(template_name)
         
-        # 获取默认里程碑
+        # 获取默认里程碑（当启用动态生成时，这些会被覆盖）
         milestones = template.get("default_milestones", [])
         
         return MilestoneJudge(

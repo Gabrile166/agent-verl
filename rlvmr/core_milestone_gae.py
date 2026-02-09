@@ -170,9 +170,11 @@ def compute_milestone_gae_from_batch(
     response_mask: torch.Tensor,
     gamma: float = 0.99,
     lam: float = 0.95,
-    cost: float = 0.01,
+    cost: float = 0.05,
     norm_adv_by_std: bool = True,
     epsilon: float = 1e-8,
+    episode_rewards: Optional[np.ndarray] = None,
+    success_flags: Optional[np.ndarray] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
     """
     从 batch 数据计算 Milestone-Guided GAE (兼容 verl 框架)
@@ -185,6 +187,8 @@ def compute_milestone_gae_from_batch(
         gamma, lam, cost: GAE 参数
         norm_adv_by_std: 是否按标准差归一化
         epsilon: 数值稳定性小量
+        episode_rewards: 每条轨迹的总奖励 (来自环境, e.g., 10 for success)
+        success_flags: 每条轨迹是否成功的标志
     
     Returns:
         advantages: token-level 优势值 (batch_size, seq_len)
@@ -223,12 +227,26 @@ def compute_milestone_gae_from_batch(
             phis = phis + [phis[-1] if phis else 0.0] * (T - len(phis))
         phis = phis[:T]
         
-        # 简化: 假设最后一步有奖励当且仅当成功
-        rewards = [0.0] * T
-        # TODO: 从 batch_data 中提取真实奖励
+        # ==================== 真实奖励提取 ====================
+        # 获取该轨迹的总奖励（来自环境）
+        if episode_rewards is not None and traj_id < len(episode_rewards):
+            total_reward = float(episode_rewards[traj_id])
+        else:
+            # Fallback: 如果没有提供，根据最终 phi 判断
+            total_reward = 10.0 if (phis and phis[-1] >= 0.99) else 0.0
         
-        # 判断是否成功 (简化逻辑)
-        success = phis[-1] >= 0.99 if phis else False
+        # 获取该轨迹是否成功
+        if success_flags is not None and traj_id < len(success_flags):
+            success = bool(success_flags[traj_id])
+        else:
+            # Fallback: 根据奖励判断（ALFWorld: r=10 表示成功）
+            success = total_reward >= 10.0
+        
+        # 稀疏奖励分配：只在最后一步给予奖励
+        rewards = [0.0] * T
+        if T > 0:
+            rewards[-1] = total_reward  # 最后一步获得全部奖励
+        
         done = True  # 假设都是完整轨迹
         
         adv, ret = compute_milestone_gae(
@@ -251,6 +269,7 @@ def compute_milestone_gae_from_batch(
             "traj_id": int(traj_id),
             "length": T,
             "success": success,
+            "total_reward": total_reward,
             "final_phi": phis[-1] if phis else 0.0,
         })
     

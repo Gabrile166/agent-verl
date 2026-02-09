@@ -3,32 +3,70 @@
 # This script demonstrates how to use the HybridGRPO advantage estimator
 # with optional Discriminator rewards for ALFWorld environment.
 
-set -x
+# set -x
 ENGINE=${1:-vllm}
-export VLLM_ATTENTION_BACKEND=XFORMERS
 
-# ===================== Configuration =====================
-MODEL_PATH=${MODEL_PATH:-"Qwen/Qwen2.5-3B-Instruct"}
-BASE_PATH=$(dirname $(dirname $(realpath $0)))
+# Clean up any existing Ray processes first
+echo "Cleaning up existing Ray processes..."
+ray stop --force 2>/dev/null || true
+sleep 2
+
+export http_proxy="http://10.70.11.190:8412"
+export https_proxy="http://10.70.11.190:8412"
+export no_proxy="localhost,127.0.0.1,0.0.0.0"
+
+export MY_TEMP_DIR="/workdir/temp_cache/${USER}/${EXP_NAME}"
+mkdir -p $MY_TEMP_DIR
+
+export RAY_TMPDIR="${MY_TEMP_DIR}/ray"
+mkdir -p $RAY_TMPDIR
+
+export TORCH_COMPILE_CACHE_DIR="${MY_TEMP_DIR}/torch_compile_cache"
+export VLLM_CACHE_DIR="${MY_TEMP_DIR}/vllm_cache"
+export TRITON_CACHE_DIR="${MY_TEMP_DIR}/triton_cache"
+mkdir -p $TORCH_COMPILE_CACHE_DIR $VLLM_CACHE_DIR $TRITON_CACHE_DIR
+
+export VLLM_ATTENTION_BACKEND=FLASH_ATTN
+export ALFWORLD_DATA=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/.cache/alfworld
+
+# Ray configuration to prevent worker explosion
+export RAY_DEDUP_LOGS=0
+
+
+source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
+conda activate verl-agent
+export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/verl-agent/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
+
+# source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
+# conda activate rlvmr-alfworld
+# export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/rlvmr-alfworld/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
+
+num_cpus_per_env_worker=0.15 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
+
+MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-7B-Instruct
+BASE_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin
+EXP_NAME=alfworld_hybrid_grpo_qwen2.5_7b_0.1step_ood
+
 
 train_data_size=16
 val_data_size=128
 group_size=8
 
 # Hybrid Reward Configuration
-REWARD_MODE="grpo"              # Options: "grpo" | "discriminator" | "hybrid"
+REWARD_MODE="hybrid"              # Options: "grpo" | "discriminator" | "hybrid"
 EPISODE_REWARD_WEIGHT=1.0       # Weight for episode-level rewards
-STEP_REWARD_WEIGHT=1.0          # Weight for step-level rewards
+STEP_REWARD_WEIGHT=0.1          # Weight for step-level rewards
 
 # Discriminator Configuration (only used when REWARD_MODE="discriminator" or "hybrid")
-DISCRIMINATOR_ENABLE=False      # Set to True to enable Discriminator
-DISCRIMINATOR_URL="http://127.0.0.1:8080/v1"
+DISCRIMINATOR_ENABLE=True      # Set to True to enable Discriminator
+DISCRIMINATOR_MODEL_NAME="Qwen3-VL-32B-Instruct-FP8"
+DISCRIMINATOR_URL="http://127.0.0.1:8080/v1,http://127.0.0.1:8081/v1"
 
 # ===================== Data Preparation =====================
-python3 -m examples.data_preprocess.prepare \
-    --mode 'text' \
-    --train_data_size $train_data_size \
-    --val_data_size $val_data_size
+# python3 -m examples.data_preprocess.prepare \
+#     --mode 'text' \
+#     --train_data_size $train_data_size \
+#     --val_data_size $val_data_size
 
 # ===================== Training =====================
 python3 -m verl.trainer.main_ppo \
@@ -37,10 +75,14 @@ python3 -m verl.trainer.main_ppo \
     algorithm.hybrid_reward.reward_mode=$REWARD_MODE \
     algorithm.hybrid_reward.episode_reward_weight=$EPISODE_REWARD_WEIGHT \
     algorithm.hybrid_reward.step_reward_weight=$STEP_REWARD_WEIGHT \
-    algorithm.discriminator.enable=$DISCRIMINATOR_ENABLE \
-    algorithm.discriminator.base_urls="[$DISCRIMINATOR_URL]" \
-    data.train_files=$BASE_PATH/data/text/train.parquet \
-    data.val_files=$BASE_PATH/data/text/test.parquet \
+    algorithm.discriminator.enable=true \
+    algorithm.expert.enable=true \
+    algorithm.discriminator.model_name=$DISCRIMINATOR_MODEL_NAME \
+    'algorithm.discriminator.base_urls=["http://127.0.0.1:8080/v1","http://127.0.0.1:8081/v1"]' \
+    algorithm.trajectory_save.enable=true \
+    algorithm.trajectory_save.output_dir=$BASE_PATH/agent-verl/output/$EXP_NAME \
+    data.train_files=$BASE_PATH/data/verl-agent/text/train.parquet \
+    data.val_files=$BASE_PATH/data/verl-agent/text/test.parquet \
     data.train_batch_size=$train_data_size \
     data.val_batch_size=$val_data_size \
     data.max_prompt_length=2048 \
@@ -55,11 +97,19 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=0.01 \
+    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.enable_chunked_prefill=False \
+    actor_rollout_ref.rollout.enforce_eager=False \
+    actor_rollout_ref.rollout.free_cache_engine=False \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.4 \
+    actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     actor_rollout_ref.actor.use_invalid_action_penalty=True \
@@ -67,13 +117,17 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     algorithm.gamma=0.95 \
     env.env_name=alfworld/AlfredTWEnv \
+    env.alfworld.eval_dataset='eval_out_of_distribution' \
     env.seed=0 \
     env.max_steps=50 \
     env.rollout.n=$group_size \
+    env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
+    ray_init.num_cpus=96 \
+    trainer.ray_wait_register_center_timeout=600 \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
     trainer.project_name='verl_agent_alfworld' \
-    trainer.experiment_name='hybrid_grpo_qwen2.5_3b' \
+    trainer.experiment_name=$EXP_NAME \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=10 \

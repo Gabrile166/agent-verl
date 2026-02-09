@@ -411,10 +411,14 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         milestone_cfg = kwargs.get("milestone_gae_config", {})
         gamma = milestone_cfg.get("gamma", 0.99)
         lam = milestone_cfg.get("lambda", 0.95)
-        cost = milestone_cfg.get("cost", 0.01)
+        cost = milestone_cfg.get("cost", 0.05)  # 更新默认 cost 为 0.05
         
         # 从 kwargs 获取预计算的 phis (由 RayPPOTrainer.fit 中的 Judge 计算)
         phis_list = milestone_cfg.get("phis_list", [])
+        
+        # 从 batch 中提取真实的环境奖励和成功状态
+        episode_rewards = data.non_tensor_batch.get('episode_rewards', None)
+        success_flags = data.non_tensor_batch.get('success', None)
         
         advantages, returns, adv_details = compute_milestone_gae_from_batch(
             batch_data=data,
@@ -425,6 +429,8 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             lam=lam,
             cost=cost,
             norm_adv_by_std=norm_adv_by_std_in_grpo,
+            episode_rewards=episode_rewards,
+            success_flags=success_flags,
         )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
@@ -553,6 +559,30 @@ class RayPPOTrainer:
                     print(f"[TrajectorySaver] Initialized with output_dir: {output_dir}")
             except Exception as e:
                 print(f"[TrajectorySaver] Failed to initialize: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Initialize MilestoneGenerator and MilestoneJudge if using milestone_gae
+        self.milestone_generator = None
+        self.milestone_judge = None
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.MilestoneGAE:
+            try:
+                # 初始化里程碑生成器
+                if (hasattr(config.algorithm, 'milestone_gae') 
+                    and hasattr(config.algorithm.milestone_gae, 'generator')
+                    and config.algorithm.milestone_gae.generator.enable):
+                    from rlvmr.milestone.generator import create_milestone_generator_from_config
+                    self.milestone_generator = create_milestone_generator_from_config(config)
+                    if self.milestone_generator:
+                        print(f"[MilestoneGenerator] Initialized")
+                
+                # 初始化里程碑判定器
+                from rlvmr.milestone.judge import create_milestone_judge_from_config
+                self.milestone_judge = create_milestone_judge_from_config(config)
+                if self.milestone_judge:
+                    print(f"[MilestoneJudge] Initialized")
+            except Exception as e:
+                print(f"[Milestone] Failed to initialize: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -1438,6 +1468,113 @@ class RayPPOTrainer:
                                     import traceback
                                     traceback.print_exc()
 
+                        # ==================== Milestone GAE Processing ====================
+                        # N+1 API 调用：1次生成里程碑 + N次判定策略轨迹
+                        milestone_gae_config = {}
+                        if self.config.algorithm.adv_estimator == AdvantageEstimator.MilestoneGAE:
+                            milestone_gae_config = {
+                                'gamma': self.config.algorithm.milestone_gae.gamma,
+                                'lambda': self.config.algorithm.milestone_gae.get('lam', 0.95),
+                                'cost': self.config.algorithm.milestone_gae.cost,
+                            }
+                            
+                            # 获取专家轨迹和策略轨迹
+                            expert_trajectories = batch.meta_info.get('expert_trajectories', [])
+                            policy_trajectories = batch.meta_info.get('formatted_policy_trajectories', [])
+                            tasks = batch.meta_info.get('tasks', [])
+                            
+                            # 按 query (uid) 分组处理
+                            traj_uids = batch.non_tensor_batch.get('traj_uid', [])
+                            uids = batch.non_tensor_batch.get('uid', [])
+                            
+                            # 构建 uid -> expert_trajectory 映射
+                            unique_uids = list(dict.fromkeys(uids))  # 保持顺序的去重
+                            uid_to_expert = {}
+                            uid_to_task = {}
+                            for i, uid in enumerate(unique_uids):
+                                if i < len(expert_trajectories):
+                                    uid_to_expert[uid] = expert_trajectories[i]
+                                if i < len(tasks):
+                                    uid_to_task[uid] = tasks[i]
+                            
+                            # 生成里程碑（每个 query 调用 1 次 API）
+                            uid_to_milestones = {}
+                            if self.milestone_generator is not None:
+                                print(f"[MilestoneGAE] Generating milestones for {len(unique_uids)} queries...")
+                                for uid in unique_uids:
+                                    expert_traj = uid_to_expert.get(uid, [])
+                                    task_desc = uid_to_task.get(uid, "")
+                                    
+                                    if expert_traj:
+                                        result = self.milestone_generator.generate(task_desc, expert_traj)
+                                        uid_to_milestones[uid] = result.milestones
+                                        if result.success:
+                                            print(f"  [Query {uid}] Generated {len(result.milestones)} milestones")
+                                        else:
+                                            print(f"  [Query {uid}] Using default milestones: {result.reasoning}")
+                                    else:
+                                        uid_to_milestones[uid] = self.milestone_generator._get_default_milestones()
+                                        print(f"  [Query {uid}] No expert trajectory, using defaults")
+                            
+                            # 判定策略轨迹（每个策略轨迹调用 1 次 API）
+                            phis_list = []
+                            if self.milestone_judge is not None and policy_trajectories:
+                                print(f"[MilestoneGAE] Judging {len(policy_trajectories)} policy trajectories...")
+                                
+                                # 构建 traj_uid -> policy_trajectory 映射
+                                unique_traj_uids = list(dict.fromkeys(traj_uids))
+                                traj_uid_to_policy = {}
+                                for i, traj_uid in enumerate(unique_traj_uids):
+                                    if i < len(policy_trajectories):
+                                        traj_uid_to_policy[traj_uid] = policy_trajectories[i]
+                                
+                                # 对每个策略轨迹进行判定
+                                for traj_uid in unique_traj_uids:
+                                    # 找到该轨迹对应的 query uid
+                                    traj_mask = [t == traj_uid for t in traj_uids]
+                                    query_uid = None
+                                    for i, m in enumerate(traj_mask):
+                                        if m:
+                                            query_uid = uids[i]
+                                            break
+                                    
+                                    if query_uid is None:
+                                        phis_list.append([0.0])
+                                        continue
+                                    
+                                    # 获取该 query 的里程碑
+                                    milestones = uid_to_milestones.get(query_uid, [])
+                                    if milestones:
+                                        self.milestone_judge.set_milestones(milestones)
+                                    
+                                    # 获取策略轨迹和任务描述
+                                    policy_traj = traj_uid_to_policy.get(traj_uid, {})
+                                    task_desc = uid_to_task.get(query_uid, "")
+                                    
+                                    # 转换格式
+                                    if isinstance(policy_traj, dict):
+                                        policy_steps = policy_traj.get('traj', [])
+                                    else:
+                                        policy_steps = policy_traj
+                                    
+                                    # 调用 Judge
+                                    try:
+                                        result = self.milestone_judge.judge_trajectory(
+                                            task_description=task_desc,
+                                            trajectory=[
+                                                {"action": s.get("action", ""), "observation": s.get("obs", s.get("observation", ""))}
+                                                for s in policy_steps
+                                            ]
+                                        )
+                                        phis_list.append(result.step_phis)
+                                    except Exception as e:
+                                        print(f"  [Traj {traj_uid}] Judge failed: {e}")
+                                        phis_list.append([0.0] * len(policy_steps) if policy_steps else [0.0])
+                                
+                                print(f"[MilestoneGAE] Judged {len(phis_list)} trajectories")
+                            
+                            milestone_gae_config['phis_list'] = phis_list
+
                         batch = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,
@@ -1451,9 +1588,10 @@ class RayPPOTrainer:
                             pf_ppo_weight_pow=self.config.algorithm.pf_ppo.weight_pow,
                             step_advantage_w=self.config.algorithm.gigpo.step_advantage_w,
                             gigpo_mode=self.config.algorithm.gigpo.mode,
-                            gigpo_enable_similarity= self.config.algorithm.gigpo.enable_similarity,
+                            gigpo_enable_similarity=self.config.algorithm.gigpo.enable_similarity,
                             gigpo_similarity_thresh=self.config.algorithm.gigpo.similarity_thresh,
                             hybrid_reward_config=hybrid_reward_config,
+                            milestone_gae_config=milestone_gae_config,
                         )
 
                     # update critic

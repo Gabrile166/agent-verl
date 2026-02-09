@@ -82,12 +82,12 @@ python3 -m verl.trainer.main_ppo \
     algorithm.milestone_gae.gamma=$MILESTONE_GAMMA \
     algorithm.milestone_gae.lam=$MILESTONE_LAMBDA \
     algorithm.milestone_gae.cost=$MILESTONE_COST \
-    algorithm.milestone_gae.judge_llm.base_url=$JUDGE_LLM_URL \
+    "algorithm.milestone_gae.judge_llm.base_url='$JUDGE_LLM_URL'" \
     algorithm.milestone_gae.judge_llm.model=$JUDGE_LLM_MODEL \
     algorithm.milestone_gae.judge_llm.temperature=0.1 \
     algorithm.milestone_gae.generator.enable=$GENERATOR_ENABLE \
     algorithm.milestone_gae.generator.num_milestones=$GENERATOR_NUM_MILESTONES \
-    algorithm.milestone_gae.generator.llm.base_url=$JUDGE_LLM_URL \
+    "algorithm.milestone_gae.generator.llm.base_url='$JUDGE_LLM_URL'" \
     algorithm.milestone_gae.generator.llm.model=$JUDGE_LLM_MODEL \
     algorithm.milestone_gae.generator.llm.temperature=0.3 \
     algorithm.milestone_gae.fallback_template=$MILESTONE_TEMPLATE \

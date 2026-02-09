@@ -1499,30 +1499,30 @@ class RayPPOTrainer:
                                 if i < len(tasks):
                                     uid_to_task[uid] = tasks[i]
                             
-                            # 生成里程碑（每个 query 调用 1 次 API）
+                            # 生成里程碑（并行调用，每个 query 1 次 API）
                             uid_to_milestones = {}
                             if self.milestone_generator is not None:
-                                print(f"[MilestoneGAE] Generating milestones for {len(unique_uids)} queries...")
-                                for uid in unique_uids:
-                                    expert_traj = uid_to_expert.get(uid, [])
-                                    task_desc = uid_to_task.get(uid, "")
-                                    
-                                    if expert_traj:
-                                        result = self.milestone_generator.generate(task_desc, expert_traj)
-                                        uid_to_milestones[uid] = result.milestones
-                                        if result.success:
-                                            print(f"  [Query {uid}] Generated {len(result.milestones)} milestones")
-                                        else:
-                                            print(f"  [Query {uid}] Using default milestones: {result.reasoning}")
+                                print(f"[MilestoneGAE] Generating milestones for {len(unique_uids)} queries (parallel)...")
+                                
+                                # 准备批量输入
+                                batch_tasks = [uid_to_task.get(uid, "") for uid in unique_uids]
+                                batch_experts = [uid_to_expert.get(uid, []) for uid in unique_uids]
+                                
+                                # 并行生成
+                                results = self.milestone_generator.batch_generate(batch_tasks, batch_experts)
+                                
+                                for uid, result in zip(unique_uids, results):
+                                    uid_to_milestones[uid] = result.milestones
+                                    if result.success:
+                                        print(f"  [Query {uid}] Generated {len(result.milestones)} milestones")
                                     else:
-                                        uid_to_milestones[uid] = self.milestone_generator._get_default_milestones()
-                                        print(f"  [Query {uid}] No expert trajectory, using defaults")
+                                        print(f"  [Query {uid}] Using default milestones: {result.reasoning}")
                             
-                            # 判定策略轨迹（每个策略轨迹调用 1 次 API）
+                            # 判定策略轨迹（并行调用，每个轨迹 1 次 API）
                             # 使用字典存储，以 traj_uid 为键
                             phis_dict = {}
                             if self.milestone_judge is not None and policy_trajectories:
-                                print(f"[MilestoneGAE] Judging {len(policy_trajectories)} policy trajectories...")
+                                print(f"[MilestoneGAE] Judging {len(policy_trajectories)} policy trajectories (parallel)...")
                                 
                                 # 构建 traj_uid -> policy_trajectory 映射
                                 unique_traj_uids = list(dict.fromkeys(traj_uids))
@@ -1531,48 +1531,76 @@ class RayPPOTrainer:
                                     if i < len(policy_trajectories):
                                         traj_uid_to_policy[traj_uid] = policy_trajectories[i]
                                 
-                                # 对每个策略轨迹进行判定
+                                # 准备批量输入：每个轨迹需要对应的 task 和 milestones
+                                batch_task_descs = []
+                                batch_trajectories = []
+                                batch_milestones = []
+                                traj_uid_order = []
+                                
                                 for traj_uid in unique_traj_uids:
                                     # 找到该轨迹对应的 query uid
-                                    traj_mask = [t == traj_uid for t in traj_uids]
                                     query_uid = None
-                                    for i, m in enumerate(traj_mask):
-                                        if m:
+                                    for i, t in enumerate(traj_uids):
+                                        if t == traj_uid:
                                             query_uid = uids[i]
                                             break
                                     
                                     if query_uid is None:
-                                        phis_dict[traj_uid] = [0.0]
                                         continue
                                     
-                                    # 获取该 query 的里程碑
+                                    # 获取里程碑
                                     milestones = uid_to_milestones.get(query_uid, [])
-                                    if milestones:
-                                        self.milestone_judge.set_milestones(milestones)
-                                    
-                                    # 获取策略轨迹和任务描述
-                                    policy_traj = traj_uid_to_policy.get(traj_uid, {})
                                     task_desc = uid_to_task.get(query_uid, "")
                                     
-                                    # 转换格式
+                                    # 获取策略轨迹
+                                    policy_traj = traj_uid_to_policy.get(traj_uid, {})
                                     if isinstance(policy_traj, dict):
                                         policy_steps = policy_traj.get('traj', [])
                                     else:
                                         policy_steps = policy_traj
                                     
-                                    # 调用 Judge
+                                    # 转换格式
+                                    formatted_traj = [
+                                        {"action": s.get("action", ""), "observation": s.get("obs", s.get("observation", ""))}
+                                        for s in policy_steps
+                                    ]
+                                    
+                                    batch_task_descs.append(task_desc)
+                                    batch_trajectories.append(formatted_traj)
+                                    batch_milestones.append(milestones)
+                                    traj_uid_order.append(traj_uid)
+                                
+                                # 并行判定（使用 ThreadPoolExecutor）
+                                from concurrent.futures import ThreadPoolExecutor, as_completed
+                                
+                                def _judge_one(idx):
                                     try:
-                                        result = self.milestone_judge.judge_trajectory(
-                                            task_description=task_desc,
-                                            trajectory=[
-                                                {"action": s.get("action", ""), "observation": s.get("obs", s.get("observation", ""))}
-                                                for s in policy_steps
-                                            ]
+                                        # 使用线程安全的方法（传入局部里程碑）
+                                        milestones = batch_milestones[idx]
+                                        if not milestones:
+                                            milestones = []
+                                        result = self.milestone_judge.judge_trajectory_with_milestones(
+                                            task_description=batch_task_descs[idx],
+                                            trajectory=batch_trajectories[idx],
+                                            milestones=milestones
                                         )
-                                        phis_dict[traj_uid] = result.step_phis
+                                        return idx, result.step_phis
                                     except Exception as e:
-                                        print(f"  [Traj {traj_uid}] Judge failed: {e}")
-                                        phis_dict[traj_uid] = [0.0] * len(policy_steps) if policy_steps else [0.0]
+                                        traj_len = len(batch_trajectories[idx]) if batch_trajectories[idx] else 1
+                                        return idx, [0.0] * traj_len
+                                
+                                max_workers = len(self.milestone_judge.clients) * 4
+                                results = [None] * len(traj_uid_order)
+                                
+                                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                                    futures = [executor.submit(_judge_one, i) for i in range(len(traj_uid_order))]
+                                    for future in as_completed(futures):
+                                        idx, step_phis = future.result()
+                                        results[idx] = step_phis
+                                
+                                # 填充结果
+                                for i, traj_uid in enumerate(traj_uid_order):
+                                    phis_dict[traj_uid] = results[i] if results[i] is not None else [0.0]
                                 
                                 print(f"[MilestoneGAE] Judged {len(phis_dict)} trajectories")
                             

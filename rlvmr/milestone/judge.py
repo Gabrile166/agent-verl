@@ -10,6 +10,7 @@ import json
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from openai import OpenAI
@@ -91,13 +92,22 @@ class MilestoneJudge:
         self,
         task_description: str,
         trajectory: List[Dict[str, str]],
+        milestones: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
-        """构建 Judge 的 Prompt"""
+        """构建 Judge 的 Prompt
+        
+        Args:
+            task_description: 任务描述
+            trajectory: 轨迹
+            milestones: 里程碑列表（可选，默认使用 self.milestones）
+        """
+        # 使用传入的里程碑或默认的实例里程碑
+        ms = milestones if milestones is not None else self.milestones
         
         # 里程碑清单
         milestone_list = "\n".join([
             f'{m["id"]} (Φ={m["phi"]}): {m["name"]} — 判定标准：{m["criteria"]}'
-            for m in self.milestones
+            for m in ms
         ])
         
         # 轨迹步骤
@@ -178,6 +188,37 @@ M0 (Φ=0.0): 尚未开始 — 判定标准：未达成任何里程碑
             reasoning=data.get("reasoning", ""),
         )
     
+    def _parse_response_with_phi_map(
+        self, response_text: str, num_steps: int, phi_map: Dict[str, float]
+    ) -> JudgmentResult:
+        """解析 LLM 响应（使用传入的 phi 映射，线程安全）"""
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if not json_match:
+            raise ValueError(f"No JSON found in response: {response_text[:200]}")
+        
+        data = json.loads(json_match.group())
+        judgments = data.get("judgments", [])
+        
+        step_phis = []
+        highest_milestones = []
+        
+        for j in judgments:
+            milestone_id = j.get("highest_milestone", "M0")
+            phi = j.get("phi", phi_map.get(milestone_id, 0.0))
+            step_phis.append(phi)
+            highest_milestones.append(milestone_id)
+        
+        while len(step_phis) < num_steps:
+            step_phis.append(step_phis[-1] if step_phis else 0.0)
+            highest_milestones.append(highest_milestones[-1] if highest_milestones else "M0")
+        
+        return JudgmentResult(
+            step_phis=step_phis[:num_steps],
+            highest_milestones=highest_milestones[:num_steps],
+            final_success=data.get("final_success", False),
+            reasoning=data.get("reasoning", ""),
+        )
+    
     def judge_trajectory(
         self,
         task_description: str,
@@ -227,25 +268,115 @@ M0 (Φ=0.0): 尚未开始 — 判定标准：未达成任何里程碑
             reasoning=f"Judge failed: {last_error}",
         )
     
+    def judge_trajectory_with_milestones(
+        self,
+        task_description: str,
+        trajectory: List[Dict[str, str]],
+        milestones: List[Dict[str, Any]],
+    ) -> JudgmentResult:
+        """
+        线程安全版本：对单条轨迹进行里程碑判定（使用传入的里程碑）
+        
+        Args:
+            task_description: 任务描述
+            trajectory: 轨迹步骤列表
+            milestones: 里程碑列表
+        
+        Returns:
+            JudgmentResult 包含每步的势能值
+        """
+        prompt = self._build_prompt(task_description, trajectory, milestones)
+        
+        # 构建局部 phi 映射
+        local_phi_map = {"M0": 0.0}
+        for m in milestones:
+            local_phi_map[m["id"]] = m["phi"]
+        
+        # 轮询选择 client
+        client_idx = self._call_index % len(self.clients)
+        self._call_index += 1
+        
+        last_error = None
+        for attempt in range(self.max_retries):
+            current_client_idx = (client_idx + attempt) % len(self.clients)
+            client = self.clients[current_client_idx]
+            
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=self.temperature,
+                )
+                response_text = response.choices[0].message.content
+                return self._parse_response_with_phi_map(response_text, len(trajectory), local_phi_map)
+            except Exception as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    print(f"[MilestoneJudge] Retry {attempt + 1}: {e}")
+        
+        print(f"[MilestoneJudge] All retries failed: {last_error}")
+        return JudgmentResult(
+            step_phis=[0.0] * len(trajectory),
+            highest_milestones=["M0"] * len(trajectory),
+            final_success=False,
+            reasoning=f"Judge failed: {last_error}",
+        )
+    
     def batch_judge(
         self,
         task_descriptions: List[str],
         trajectories: List[List[Dict[str, str]]],
+        max_workers: Optional[int] = None,
     ) -> List[JudgmentResult]:
         """
-        批量判定多条轨迹
+        并行批量判定多条轨迹
         
         Args:
             task_descriptions: 任务描述列表
             trajectories: 轨迹列表
+            max_workers: 最大并行数，默认为 len(clients) * 4
         
         Returns:
             判定结果列表
         """
-        results = []
-        for task_desc, traj in zip(task_descriptions, trajectories):
+        if not task_descriptions:
+            return []
+        
+        n = len(task_descriptions)
+        if max_workers is None:
+            max_workers = len(self.clients) * 4
+        
+        results = [None] * n
+        
+        def _judge_one(idx: int) -> Tuple[int, JudgmentResult]:
+            """判定单条轨迹（带索引返回）"""
+            task_desc = task_descriptions[idx]
+            traj = trajectories[idx] if idx < len(trajectories) else []
             result = self.judge_trajectory(task_desc, traj)
-            results.append(result)
+            return idx, result
+        
+        # 使用 ThreadPoolExecutor 并行执行
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_judge_one, i) for i in range(n)]
+            
+            for future in as_completed(futures):
+                try:
+                    idx, result = future.result()
+                    results[idx] = result
+                except Exception as e:
+                    print(f"[MilestoneJudge] batch_judge error: {e}")
+        
+        # 填充失败的结果
+        for i in range(n):
+            if results[i] is None:
+                traj_len = len(trajectories[i]) if i < len(trajectories) else 1
+                results[i] = JudgmentResult(
+                    step_phis=[0.0] * traj_len,
+                    highest_milestones=["M0"] * traj_len,
+                    final_success=False,
+                    reasoning="Parallel judging failed",
+                )
+        
         return results
 
 

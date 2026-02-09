@@ -7,8 +7,9 @@ This replaces static JSON templates with dynamic, task-specific milestones.
 
 import json
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from openai import OpenAI
@@ -205,6 +206,61 @@ class MilestoneGenerator:
             success=False,
         )
     
+    def batch_generate(
+        self,
+        task_descriptions: List[str],
+        expert_trajectories: List[List[Dict]],
+        max_workers: Optional[int] = None,
+    ) -> List[GeneratedMilestones]:
+        """
+        并行生成多个里程碑清单
+        
+        Args:
+            task_descriptions: 任务描述列表
+            expert_trajectories: 专家轨迹列表
+            max_workers: 最大并行数，默认为 len(clients) * 4
+            
+        Returns:
+            GeneratedMilestones 列表
+        """
+        if not task_descriptions:
+            return []
+        
+        n = len(task_descriptions)
+        if max_workers is None:
+            max_workers = len(self.clients) * 4
+        
+        results = [None] * n
+        
+        def _generate_one(idx: int) -> Tuple[int, GeneratedMilestones]:
+            """生成单个里程碑（带索引返回）"""
+            task_desc = task_descriptions[idx]
+            expert_traj = expert_trajectories[idx] if idx < len(expert_trajectories) else []
+            result = self.generate(task_desc, expert_traj)
+            return idx, result
+        
+        # 使用 ThreadPoolExecutor 并行执行
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_generate_one, i) for i in range(n)]
+            
+            for future in as_completed(futures):
+                try:
+                    idx, result = future.result()
+                    results[idx] = result
+                except Exception as e:
+                    print(f"[MilestoneGenerator] batch_generate error: {e}")
+        
+        # 填充失败的结果
+        for i in range(n):
+            if results[i] is None:
+                results[i] = GeneratedMilestones(
+                    milestones=self._get_default_milestones(),
+                    reasoning="Parallel generation failed",
+                    success=False,
+                )
+        
+        return results
+
     def _get_default_milestones(self) -> List[Dict[str, Any]]:
         """获取默认里程碑（fallback）"""
         n = self.num_milestones

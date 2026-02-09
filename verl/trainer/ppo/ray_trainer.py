@@ -1572,10 +1572,6 @@ class RayPPOTrainer:
                                 
                                 # 并行判定（使用 ThreadPoolExecutor）
                                 from concurrent.futures import ThreadPoolExecutor, as_completed
-                                try:
-                                    from tqdm import tqdm
-                                except ImportError:
-                                    tqdm = None
                                 
                                 def _judge_one(idx):
                                     try:

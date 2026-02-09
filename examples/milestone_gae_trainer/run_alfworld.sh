@@ -134,6 +134,7 @@ python3 -m verl.trainer.main_ppo \
     env.alfworld.eval_dataset='eval_out_of_distribution' \
     env.seed=0 \
     env.max_steps=30 \
+    env.history_length=10 \
     env.rollout.n=$group_size \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     ray_init.num_cpus=96 \

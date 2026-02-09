@@ -529,7 +529,8 @@ class RayPPOTrainer:
             AdvantageEstimator.RLOO,
             AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
             AdvantageEstimator.GiGPO,
-            AdvantageEstimator.HybridGRPO
+            AdvantageEstimator.HybridGRPO,
+            AdvantageEstimator.MilestoneGAE,  # Milestone-Guided GAE (no critic)
         ]:
             self.use_critic = False
         else:

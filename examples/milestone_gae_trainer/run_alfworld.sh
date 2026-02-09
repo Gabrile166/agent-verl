@@ -58,7 +58,9 @@ MILESTONE_LAMBDA=0.95
 MILESTONE_COST=0.05
 
 # Judge LLM Configuration (for milestone evaluation)
-JUDGE_LLM_URL=${JUDGE_LLM_URL:-"http://127.0.0.1:8080/v1,http://127.0.0.1:8081/v1"}
+# Supports multiple URLs for load balancing
+JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://127.0.0.1:8080/v1"}
+JUDGE_LLM_URL_2=${JUDGE_LLM_URL_2:-"http://127.0.0.1:8081/v1"}
 JUDGE_LLM_MODEL=${JUDGE_LLM_MODEL:-"Qwen3-VL-32B-Instruct-FP8"}
 
 # Dynamic Milestone Generation Configuration
@@ -82,12 +84,12 @@ python3 -m verl.trainer.main_ppo \
     algorithm.milestone_gae.gamma=$MILESTONE_GAMMA \
     algorithm.milestone_gae.lam=$MILESTONE_LAMBDA \
     algorithm.milestone_gae.cost=$MILESTONE_COST \
-    "algorithm.milestone_gae.judge_llm.base_url='$JUDGE_LLM_URL'" \
+    'algorithm.milestone_gae.judge_llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
     algorithm.milestone_gae.judge_llm.model=$JUDGE_LLM_MODEL \
     algorithm.milestone_gae.judge_llm.temperature=0.1 \
     algorithm.milestone_gae.generator.enable=$GENERATOR_ENABLE \
     algorithm.milestone_gae.generator.num_milestones=$GENERATOR_NUM_MILESTONES \
-    "algorithm.milestone_gae.generator.llm.base_url='$JUDGE_LLM_URL'" \
+    'algorithm.milestone_gae.generator.llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
     algorithm.milestone_gae.generator.llm.model=$JUDGE_LLM_MODEL \
     algorithm.milestone_gae.generator.llm.temperature=0.3 \
     algorithm.milestone_gae.fallback_template=$MILESTONE_TEMPLATE \

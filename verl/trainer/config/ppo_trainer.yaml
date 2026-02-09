@@ -296,16 +296,16 @@ algorithm:
     fallback_template: "alfworld"    # Fallback milestone template name
     # Judge LLM Configuration
     judge_llm:
-      base_url: "http://127.0.0.1:8080/v1"  # LLM API endpoint(s), comma-separated for multiple
-      model: "Qwen3-VL-32B-Instruct-FP8"    # Model name for judge
-      api_key: "EMPTY"                       # API key
-      temperature: 0.1                       # Temperature for stable judgments
+      base_urls: ["http://127.0.0.1:8080/v1"]  # LLM API endpoints (list for load balancing)
+      model: "Qwen3-VL-32B-Instruct-FP8"       # Model name for judge
+      api_key: "EMPTY"                          # API key
+      temperature: 0.1                          # Temperature for stable judgments
     # Dynamic Milestone Generator Configuration
     generator:
       enable: False                  # Whether to dynamically generate milestones
       num_milestones: 5              # Number of milestones to generate
       llm:
-        base_url: "http://127.0.0.1:8080/v1"
+        base_urls: ["http://127.0.0.1:8080/v1"]
         model: "Qwen3-VL-32B-Instruct-FP8"
         api_key: "EMPTY"
         temperature: 0.3

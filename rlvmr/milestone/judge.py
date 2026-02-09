@@ -31,11 +31,12 @@ class MilestoneJudge:
     基于 LLM 的里程碑判定器
     
     对整条轨迹进行一次性判定，输出每个步骤的势能值 Φ(s)。
+    支持多 URL 负载均衡。
     """
     
     def __init__(
         self,
-        base_url: str,
+        base_urls: List[str],
         model: str,
         milestones: List[Dict[str, Any]],
         api_key: str = "EMPTY",
@@ -46,7 +47,7 @@ class MilestoneJudge:
         初始化 MilestoneJudge
         
         Args:
-            base_url: LLM API 地址
+            base_urls: LLM API 地址列表 (支持多 URL 负载均衡)
             model: 模型名称
             milestones: 里程碑列表，每个元素包含 id, name, phi, criteria
             api_key: API 密钥
@@ -56,11 +57,16 @@ class MilestoneJudge:
         if OpenAI is None:
             raise ImportError("openai package is required. Install with: pip install openai")
         
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
+        # 支持多 URL 负载均衡
+        self.clients = []
+        for url in base_urls:
+            self.clients.append(OpenAI(base_url=url, api_key=api_key))
+        
         self.model = model
         self.milestones = milestones
         self.temperature = temperature
         self.max_retries = max_retries
+        self._call_index = 0  # 用于轮询负载均衡
         
         # 构建里程碑 ID 到 phi 的映射
         self.milestone_to_phi = {"M0": 0.0}
@@ -189,9 +195,18 @@ M0 (Φ=0.0): 尚未开始 — 判定标准：未达成任何里程碑
         """
         prompt = self._build_prompt(task_description, trajectory)
         
+        # 轮询选择 client
+        client_idx = self._call_index % len(self.clients)
+        self._call_index += 1
+        
+        last_error = None
         for attempt in range(self.max_retries):
+            # 在不同 URL 之间轮换尝试
+            current_client_idx = (client_idx + attempt) % len(self.clients)
+            client = self.clients[current_client_idx]
+            
             try:
-                response = self.client.chat.completions.create(
+                response = client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=self.temperature,
@@ -199,16 +214,18 @@ M0 (Φ=0.0): 尚未开始 — 判定标准：未达成任何里程碑
                 response_text = response.choices[0].message.content
                 return self._parse_response(response_text, len(trajectory))
             except Exception as e:
-                if attempt == self.max_retries - 1:
-                    # 最后一次尝试失败，返回默认值
-                    print(f"[MilestoneJudge] All retries failed: {e}")
-                    return JudgmentResult(
-                        step_phis=[0.0] * len(trajectory),
-                        highest_milestones=["M0"] * len(trajectory),
-                        final_success=False,
-                        reasoning=f"Judge failed: {e}",
-                    )
-                print(f"[MilestoneJudge] Retry {attempt + 1}: {e}")
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    print(f"[MilestoneJudge] Retry {attempt + 1}: {e}")
+        
+        # 所有尝试失败，返回默认值
+        print(f"[MilestoneJudge] All retries failed: {last_error}")
+        return JudgmentResult(
+            step_phis=[0.0] * len(trajectory),
+            highest_milestones=["M0"] * len(trajectory),
+            final_success=False,
+            reasoning=f"Judge failed: {last_error}",
+        )
     
     def batch_judge(
         self,
@@ -243,6 +260,8 @@ def create_milestone_judge_from_config(config) -> Optional[MilestoneJudge]:
         MilestoneJudge 实例，如果配置不完整则返回 None
     """
     try:
+        import json as json_module
+        
         milestone_cfg = config.algorithm.milestone_gae
         judge_cfg = milestone_cfg.judge_llm
         
@@ -255,8 +274,39 @@ def create_milestone_judge_from_config(config) -> Optional[MilestoneJudge]:
         # 获取默认里程碑（当启用动态生成时，这些会被覆盖）
         milestones = template.get("default_milestones", [])
         
+        # 处理 base_urls - 支持列表、JSON 字符串、逗号分隔字符串
+        base_urls = judge_cfg.get("base_urls", judge_cfg.get("base_url", "http://127.0.0.1:8080/v1"))
+        
+        if isinstance(base_urls, str):
+            # 去除可能的外层引号
+            base_urls = base_urls.strip("'\"")
+            
+            if base_urls.startswith('[') and base_urls.endswith(']'):
+                # JSON 数组格式: ["url1", "url2"]
+                try:
+                    base_urls = json_module.loads(base_urls)
+                    print(f"  [MilestoneJudge] base_urls parsed from JSON: {base_urls}")
+                except json_module.JSONDecodeError:
+                    # 非标准格式，尝试手动解析
+                    base_urls = base_urls[1:-1].split(',')
+                    base_urls = [url.strip().strip('"').strip("'") for url in base_urls]
+                    print(f"  [MilestoneJudge] base_urls parsed from bracket string: {base_urls}")
+            elif ',' in base_urls:
+                # 逗号分隔格式: url1,url2
+                base_urls = [url.strip().strip('"').strip("'") for url in base_urls.split(',')]
+                print(f"  [MilestoneJudge] base_urls parsed from comma-separated: {base_urls}")
+            else:
+                # 单个 URL
+                base_urls = [base_urls]
+                print(f"  [MilestoneJudge] base_urls single URL: {base_urls}")
+        else:
+            # 已经是列表
+            base_urls = list(base_urls)
+        
+        print(f"[MilestoneJudge] Creating with {len(base_urls)} URLs: {base_urls}")
+        
         return MilestoneJudge(
-            base_url=judge_cfg.base_url,
+            base_urls=base_urls,
             model=judge_cfg.model,
             milestones=milestones,
             api_key=judge_cfg.get("api_key", "EMPTY"),
@@ -264,4 +314,6 @@ def create_milestone_judge_from_config(config) -> Optional[MilestoneJudge]:
         )
     except Exception as e:
         print(f"[MilestoneJudge] Failed to create from config: {e}")
+        import traceback
+        traceback.print_exc()
         return None

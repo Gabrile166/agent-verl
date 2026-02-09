@@ -414,7 +414,8 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         cost = milestone_cfg.get("cost", 0.05)  # 更新默认 cost 为 0.05
         
         # 从 kwargs 获取预计算的 phis (由 RayPPOTrainer.fit 中的 Judge 计算)
-        phis_list = milestone_cfg.get("phis_list", [])
+        # phis_dict: {traj_uid: [phi_0, phi_1, ...]}
+        phis_dict = milestone_cfg.get("phis_dict", {})
         
         # 从 batch 中提取真实的环境奖励和成功状态
         episode_rewards = data.non_tensor_batch.get('episode_rewards', None)
@@ -422,7 +423,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         
         advantages, returns, adv_details = compute_milestone_gae_from_batch(
             batch_data=data,
-            phis_list=phis_list,
+            phis_dict=phis_dict,
             traj_index=data.non_tensor_batch['traj_uid'],
             response_mask=data.batch['response_mask'],
             gamma=gamma,
@@ -1518,7 +1519,8 @@ class RayPPOTrainer:
                                         print(f"  [Query {uid}] No expert trajectory, using defaults")
                             
                             # 判定策略轨迹（每个策略轨迹调用 1 次 API）
-                            phis_list = []
+                            # 使用字典存储，以 traj_uid 为键
+                            phis_dict = {}
                             if self.milestone_judge is not None and policy_trajectories:
                                 print(f"[MilestoneGAE] Judging {len(policy_trajectories)} policy trajectories...")
                                 
@@ -1540,7 +1542,7 @@ class RayPPOTrainer:
                                             break
                                     
                                     if query_uid is None:
-                                        phis_list.append([0.0])
+                                        phis_dict[traj_uid] = [0.0]
                                         continue
                                     
                                     # 获取该 query 的里程碑
@@ -1567,14 +1569,14 @@ class RayPPOTrainer:
                                                 for s in policy_steps
                                             ]
                                         )
-                                        phis_list.append(result.step_phis)
+                                        phis_dict[traj_uid] = result.step_phis
                                     except Exception as e:
                                         print(f"  [Traj {traj_uid}] Judge failed: {e}")
-                                        phis_list.append([0.0] * len(policy_steps) if policy_steps else [0.0])
+                                        phis_dict[traj_uid] = [0.0] * len(policy_steps) if policy_steps else [0.0]
                                 
-                                print(f"[MilestoneGAE] Judged {len(phis_list)} trajectories")
+                                print(f"[MilestoneGAE] Judged {len(phis_dict)} trajectories")
                             
-                            milestone_gae_config['phis_list'] = phis_list
+                            milestone_gae_config['phis_dict'] = phis_dict
 
                         batch = compute_advantage(
                             batch,

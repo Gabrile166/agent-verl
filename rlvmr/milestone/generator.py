@@ -62,7 +62,7 @@ class MilestoneGenerator:
 
     def __init__(
         self,
-        base_url: str,
+        base_urls: List[str],
         model: str,
         api_key: str = "EMPTY",
         temperature: float = 0.3,
@@ -73,7 +73,7 @@ class MilestoneGenerator:
         初始化 MilestoneGenerator
         
         Args:
-            base_url: LLM API 地址
+            base_urls: LLM API 地址列表 (支持多 URL 负载均衡)
             model: 模型名称
             api_key: API 密钥
             temperature: 采样温度（生成时稍高一些）
@@ -83,11 +83,16 @@ class MilestoneGenerator:
         if OpenAI is None:
             raise ImportError("openai package is required. Install with: pip install openai")
         
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
+        # 支持多 URL 负载均衡
+        self.clients = []
+        for url in base_urls:
+            self.clients.append(OpenAI(base_url=url, api_key=api_key))
+        
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
         self.num_milestones = num_milestones
+        self._call_index = 0  # 用于轮询负载均衡
     
     def _format_trajectory(self, trajectory: List[Dict]) -> str:
         """格式化轨迹为可读字符串"""
@@ -169,9 +174,17 @@ class MilestoneGenerator:
         
         prompt = self._build_prompt(task_description, expert_trajectory)
         
+        # 轮询选择 client
+        client_idx = self._call_index % len(self.clients)
+        self._call_index += 1
+        
         for attempt in range(self.max_retries):
+            # 在不同 URL 之间轮换尝试
+            current_client_idx = (client_idx + attempt) % len(self.clients)
+            client = self.clients[current_client_idx]
+            
             try:
-                response = self.client.chat.completions.create(
+                response = client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=self.temperature,
@@ -217,14 +230,42 @@ def create_milestone_generator_from_config(config) -> Optional[MilestoneGenerato
         MilestoneGenerator 实例，如果配置不完整则返回 None
     """
     try:
+        import json as json_module
+        
         milestone_cfg = config.algorithm.milestone_gae
         gen_cfg = milestone_cfg.generator
         
         if not gen_cfg.enable:
             return None
         
+        # 处理 base_urls - 支持列表、JSON 字符串、逗号分隔字符串
+        base_urls = gen_cfg.llm.get("base_urls", gen_cfg.llm.get("base_url", "http://127.0.0.1:8080/v1"))
+        
+        if isinstance(base_urls, str):
+            # 去除可能的外层引号
+            base_urls = base_urls.strip("'\"")
+            
+            if base_urls.startswith('[') and base_urls.endswith(']'):
+                # JSON 数组格式
+                try:
+                    base_urls = json_module.loads(base_urls)
+                except json_module.JSONDecodeError:
+                    base_urls = base_urls[1:-1].split(',')
+                    base_urls = [url.strip().strip('"').strip("'") for url in base_urls]
+            elif ',' in base_urls:
+                # 逗号分隔格式
+                base_urls = [url.strip().strip('"').strip("'") for url in base_urls.split(',')]
+            else:
+                # 单个 URL
+                base_urls = [base_urls]
+        else:
+            # 已经是列表
+            base_urls = list(base_urls)
+        
+        print(f"[MilestoneGenerator] Creating with {len(base_urls)} URLs: {base_urls}")
+        
         return MilestoneGenerator(
-            base_url=gen_cfg.llm.base_url,
+            base_urls=base_urls,
             model=gen_cfg.llm.model,
             api_key=gen_cfg.llm.get("api_key", "EMPTY"),
             temperature=gen_cfg.llm.get("temperature", 0.3),
@@ -232,4 +273,6 @@ def create_milestone_generator_from_config(config) -> Optional[MilestoneGenerato
         )
     except Exception as e:
         print(f"[MilestoneGenerator] Failed to create from config: {e}")
+        import traceback
+        traceback.print_exc()
         return None

@@ -165,7 +165,7 @@ def compute_milestone_gae_advantage(
 
 def compute_milestone_gae_from_batch(
     batch_data: Any,
-    phis_list: List[List[float]],
+    phis_dict: Dict[str, List[float]],
     traj_index: np.ndarray,
     response_mask: torch.Tensor,
     gamma: float = 0.99,
@@ -181,8 +181,8 @@ def compute_milestone_gae_from_batch(
     
     Args:
         batch_data: verl 框架的 batch 数据
-        phis_list: 势能值列表，按 traj_index 分组
-        traj_index: 轨迹索引数组
+        phis_dict: 势能值字典，以 traj_uid 为键，值为 [phi_0, phi_1, ...]
+        traj_index: 轨迹索引数组 (traj_uid 字符串)
         response_mask: 响应掩码
         gamma, lam, cost: GAE 参数
         norm_adv_by_std: 是否按标准差归一化
@@ -198,8 +198,11 @@ def compute_milestone_gae_from_batch(
     device = response_mask.device
     batch_size, seq_len = response_mask.shape
     
-    # 获取唯一的轨迹索引
+    # 获取唯一的轨迹索引 (traj_uid 字符串)
     unique_trajs = np.unique(traj_index)
+    
+    # 构建 traj_uid -> 索引的映射 (用于 episode_rewards 和 success_flags)
+    unique_trajs_list = list(unique_trajs)
     
     # 存储每个 step 的优势值
     step_advantages = torch.zeros(batch_size, dtype=torch.float32, device=device)
@@ -207,16 +210,16 @@ def compute_milestone_gae_from_batch(
     
     # 对每条轨迹计算 GAE
     traj_details = []
-    for traj_id in unique_trajs:
+    for traj_idx, traj_id in enumerate(unique_trajs):
         mask = traj_index == traj_id
         indices = np.where(mask)[0]
         
         if len(indices) == 0:
             continue
         
-        # 获取该轨迹的 phis
-        if traj_id < len(phis_list):
-            phis = phis_list[traj_id]
+        # 获取该轨迹的 phis (使用字典查找)
+        if traj_id in phis_dict:
+            phis = phis_dict[traj_id]
         else:
             # Fallback: 使用线性增长
             phis = [i / len(indices) for i in range(len(indices))]
@@ -229,15 +232,16 @@ def compute_milestone_gae_from_batch(
         
         # ==================== 真实奖励提取 ====================
         # 获取该轨迹的总奖励（来自环境）
-        if episode_rewards is not None and traj_id < len(episode_rewards):
-            total_reward = float(episode_rewards[traj_id])
+        # 使用 traj_idx (整数索引) 访问 episode_rewards 而非 traj_id (UUID 字符串)
+        if episode_rewards is not None and traj_idx < len(episode_rewards):
+            total_reward = float(episode_rewards[traj_idx])
         else:
             # Fallback: 如果没有提供，根据最终 phi 判断
             total_reward = 10.0 if (phis and phis[-1] >= 0.99) else 0.0
         
         # 获取该轨迹是否成功
-        if success_flags is not None and traj_id < len(success_flags):
-            success = bool(success_flags[traj_id])
+        if success_flags is not None and traj_idx < len(success_flags):
+            success = bool(success_flags[traj_idx])
         else:
             # Fallback: 根据奖励判断（ALFWorld: r=10 表示成功）
             success = total_reward >= 10.0

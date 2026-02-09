@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
+try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
@@ -359,12 +364,22 @@ M0 (Φ=0.0): 尚未开始 — 判定标准：未达成任何里程碑
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(_judge_one, i) for i in range(n)]
             
+            # 进度条
+            if tqdm is not None:
+                pbar = tqdm(total=n, desc="[Judge] Trajectories", unit="traj")
+            
             for future in as_completed(futures):
                 try:
                     idx, result = future.result()
                     results[idx] = result
                 except Exception as e:
                     print(f"[MilestoneJudge] batch_judge error: {e}")
+                finally:
+                    if tqdm is not None:
+                        pbar.update(1)
+            
+            if tqdm is not None:
+                pbar.close()
         
         # 填充失败的结果
         for i in range(n):

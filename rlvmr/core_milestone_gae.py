@@ -270,7 +270,7 @@ def compute_milestone_gae_from_batch(
                 step_returns[idx] = ret[i]
         
         traj_details.append({
-            "traj_id": int(traj_id),
+            "traj_id": str(traj_id),  # traj_id 是 UUID 字符串
             "length": T,
             "success": success,
             "total_reward": total_reward,

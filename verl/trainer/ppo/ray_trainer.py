@@ -1572,6 +1572,10 @@ class RayPPOTrainer:
                                 
                                 # 并行判定（使用 ThreadPoolExecutor）
                                 from concurrent.futures import ThreadPoolExecutor, as_completed
+                                try:
+                                    from tqdm import tqdm
+                                except ImportError:
+                                    tqdm = None
                                 
                                 def _judge_one(idx):
                                     try:
@@ -1594,9 +1598,19 @@ class RayPPOTrainer:
                                 
                                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                                     futures = [executor.submit(_judge_one, i) for i in range(len(traj_uid_order))]
+                                    
+                                    # 进度条
+                                    if tqdm is not None:
+                                        pbar = tqdm(total=len(traj_uid_order), desc="[Judge] Trajectories", unit="traj")
+                                    
                                     for future in as_completed(futures):
                                         idx, step_phis = future.result()
                                         results[idx] = step_phis
+                                        if tqdm is not None:
+                                            pbar.update(1)
+                                    
+                                    if tqdm is not None:
+                                        pbar.close()
                                 
                                 # 填充结果
                                 for i, traj_uid in enumerate(traj_uid_order):

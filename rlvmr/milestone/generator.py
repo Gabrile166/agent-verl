@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
+try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
@@ -243,12 +248,22 @@ class MilestoneGenerator:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(_generate_one, i) for i in range(n)]
             
+            # 进度条
+            if tqdm is not None:
+                pbar = tqdm(total=n, desc="[Generator] Milestones", unit="query")
+            
             for future in as_completed(futures):
                 try:
                     idx, result = future.result()
                     results[idx] = result
                 except Exception as e:
                     print(f"[MilestoneGenerator] batch_generate error: {e}")
+                finally:
+                    if tqdm is not None:
+                        pbar.update(1)
+            
+            if tqdm is not None:
+                pbar.close()
         
         # 填充失败的结果
         for i in range(n):

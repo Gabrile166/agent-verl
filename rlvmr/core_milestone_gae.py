@@ -198,18 +198,22 @@ def compute_milestone_gae_from_batch(
     device = response_mask.device
     batch_size, seq_len = response_mask.shape
     
-    # 获取唯一的轨迹索引 (traj_uid 字符串)
-    unique_trajs = np.unique(traj_index)
-    
-    # 构建 traj_uid -> 索引的映射 (用于 episode_rewards 和 success_flags)
-    unique_trajs_list = list(unique_trajs)
+    # 获取唯一的轨迹索引 (保持原始出现顺序，避免 np.unique 字母排序破坏与 episode_rewards 的对应关系)
+    seen = set()
+    unique_trajs = []
+    for t in traj_index:
+        if t not in seen:
+            seen.add(t)
+            unique_trajs.append(t)
     
     # 存储每个 step 的优势值
     step_advantages = torch.zeros(batch_size, dtype=torch.float32, device=device)
     step_returns = torch.zeros(batch_size, dtype=torch.float32, device=device)
+    assigned_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
     
     # 对每条轨迹计算 GAE
     traj_details = []
+    fallback_count = 0
     for traj_idx, traj_id in enumerate(unique_trajs):
         mask = traj_index == traj_id
         indices = np.where(mask)[0]
@@ -223,6 +227,7 @@ def compute_milestone_gae_from_batch(
         else:
             # Fallback: 使用线性增长
             phis = [i / len(indices) for i in range(len(indices))]
+            fallback_count += 1
         
         # 确保长度匹配
         T = len(indices)
@@ -268,6 +273,7 @@ def compute_milestone_gae_from_batch(
             if i < len(adv):
                 step_advantages[idx] = adv[i]
                 step_returns[idx] = ret[i]
+                assigned_mask[idx] = True
         
         traj_details.append({
             "traj_id": str(traj_id),  # traj_id 是 UUID 字符串
@@ -277,8 +283,8 @@ def compute_milestone_gae_from_batch(
             "final_phi": phis[-1] if phis else 0.0,
         })
     
-    # 全局归一化
-    valid_mask = step_advantages != 0  # 简单过滤
+    # 全局归一化（使用 assigned_mask 而非 != 0，避免合法的 0 值被排除）
+    valid_mask = assigned_mask
     if valid_mask.sum() > 0:
         mean_adv = step_advantages[valid_mask].mean()
         std_adv = step_advantages[valid_mask].std()
@@ -296,11 +302,42 @@ def compute_milestone_gae_from_batch(
     returns = step_returns.unsqueeze(-1).expand(-1, seq_len) * response_mask
     
     details = {
-        "raw_mean": mean_adv.item(),
-        "raw_std": std_adv.item(),
+        "adv/raw_mean": mean_adv.item(),
+        "adv/raw_std": std_adv.item(),
         "num_trajectories": len(unique_trajs),
         "total_steps": batch_size,
-        "traj_details": traj_details,
+        "judge/fallback_ratio": fallback_count / max(len(unique_trajs), 1),
     }
+    
+    # ==================== Phi 质量诊断指标 ====================
+    success_final_phis = [d["final_phi"] for d in traj_details if d["success"]]
+    failure_final_phis = [d["final_phi"] for d in traj_details if not d["success"]]
+    
+    if success_final_phis:
+        s_phis = torch.tensor(success_final_phis)
+        details["phi/success_final/mean"] = s_phis.mean().item()
+        details["phi/success_final/min"] = s_phis.min().item()
+        details["phi/success_final/max"] = s_phis.max().item()
+        details["phi/success_final/std"] = s_phis.std().item() if len(s_phis) > 1 else 0.0
+        details["phi/success_final_ge_0.8_ratio"] = (s_phis >= 0.8).float().mean().item()
+    
+    if failure_final_phis:
+        f_phis = torch.tensor(failure_final_phis)
+        details["phi/failure_final/mean"] = f_phis.mean().item()
+        details["phi/failure_final/min"] = f_phis.min().item()
+        details["phi/failure_final/max"] = f_phis.max().item()
+        details["phi/failure_final/std"] = f_phis.std().item() if len(f_phis) > 1 else 0.0
+        details["phi/failure_final_ge_0.8_ratio"] = (f_phis >= 0.8).float().mean().item()
+    
+    # Advantage 信号方向验证
+    success_advs = [step_advantages[np.where(traj_index == d["traj_id"])[0]].mean().item()
+                    for d in traj_details if d["success"]]
+    failure_advs = [step_advantages[np.where(traj_index == d["traj_id"])[0]].mean().item()
+                    for d in traj_details if not d["success"]]
+    if success_advs:
+        details["adv/success_mean"] = sum(success_advs) / len(success_advs)
+    if failure_advs:
+        details["adv/failure_mean"] = sum(failure_advs) / len(failure_advs)
+    details["adv/success_ratio"] = len(success_final_phis) / max(len(traj_details), 1)
     
     return advantages, returns, details

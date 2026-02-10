@@ -435,6 +435,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+        data.meta_info['milestone_gae_details'] = adv_details
     else:
         raise NotImplementedError
     return data
@@ -1688,6 +1689,11 @@ class RayPPOTrainer:
                 )
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                # Log Milestone GAE diagnostics
+                if 'milestone_gae_details' in batch.meta_info:
+                    for key, val in batch.meta_info['milestone_gae_details'].items():
+                        if isinstance(val, (int, float)):
+                            metrics[f"milestone/{key}"] = val
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()

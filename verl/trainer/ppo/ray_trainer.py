@@ -1490,15 +1490,18 @@ class RayPPOTrainer:
                             traj_uids = batch.non_tensor_batch.get('traj_uid', [])
                             uids = batch.non_tensor_batch.get('uid', [])
                             
-                            # 构建 uid -> expert_trajectory 映射
+                            # 构建 uid -> expert_trajectory / task 映射
                             unique_uids = list(dict.fromkeys(uids))  # 保持顺序的去重
                             uid_to_expert = {}
                             uid_to_task = {}
                             for i, uid in enumerate(unique_uids):
                                 if i < len(expert_trajectories):
                                     uid_to_expert[uid] = expert_trajectories[i]
-                                if i < len(tasks):
-                                    uid_to_task[uid] = tasks[i]
+                                # Fix: 通过 uids 数组反查该 uid 首次出现的位置，
+                                # 用该位置索引 tasks（避免 unique_uids 和 tasks 长度不匹配）
+                                first_idx = next((j for j, u in enumerate(uids) if u == uid), None)
+                                if first_idx is not None and first_idx < len(tasks):
+                                    uid_to_task[uid] = tasks[first_idx]
                             
                             # 生成里程碑（并行调用，每个 query 1 次 API）
                             uid_to_milestones = {}

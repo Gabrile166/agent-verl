@@ -111,7 +111,7 @@ class MilestoneJudge:
         
         # 里程碑清单
         milestone_list = "\n".join([
-            f'{m["id"]} (Φ={m["phi"]}): {m["name"]} — 判定标准：{m["criteria"]}'
+            f'{m["id"]} (Φ={m["phi"]}): {m["name"]} — Criteria: {m["criteria"]}'
             for m in ms
         ])
         
@@ -120,25 +120,27 @@ class MilestoneJudge:
         for i, step in enumerate(trajectory, 1):
             action = step.get("action", "N/A")
             observation = step.get("observation", "N/A")
-            steps_str += f"\nStep {i}:\n  Action: {action}\n  Observation: {observation}\n"
+            steps_str += f"\nStep {i}:\n  Environment State: {observation}\n  Agent Action: {action}\n"
         
-        prompt = f"""你是一个任务进度评估器。
+        prompt = f"""You are a task progress evaluator.
 
-## 任务描述
+## Task Description
 {task_description}
 
-## 里程碑清单
-M0 (Φ=0.0): 尚未开始 — 判定标准：未达成任何里程碑
+## Milestone Checklist
+M0 (Φ=0.0): Not started — Criteria: No milestone has been achieved
 {milestone_list}
 
-## Agent 执行轨迹
+## Agent Execution Trajectory
+
+Note: Each step shows the environment state (what the agent observes before acting) followed by the agent's action.
 {steps_str}
 
-## 任务
+## Instructions
 
-请对每个步骤判断已达成的最高里程碑。
+Evaluate the highest milestone achieved at each step.
 
-输出格式 (严格 JSON):
+Output format (strict JSON):
 {{
   "judgments": [
     {{"step": 1, "highest_milestone": "M0", "phi": 0.0}},
@@ -146,14 +148,14 @@ M0 (Φ=0.0): 尚未开始 — 判定标准：未达成任何里程碑
     ...
   ],
   "final_success": true/false,
-  "reasoning": "简要说明判断依据"
+  "reasoning": "Brief explanation of your judgment"
 }}
 
-注意：
-1. M0 表示尚未达成任何里程碑，phi=0.0
-2. 里程碑通常是单调递增的（偶尔可能因错误动作回退）
-3. 只有最终确认任务成功才能达到最高里程碑 (phi=1.0)
-4. 必须输出有效的 JSON 格式"""
+Notes:
+1. M0 means no milestone has been achieved yet, phi=0.0
+2. Milestones are generally monotonically increasing (may occasionally regress due to wrong actions)
+3. The highest milestone (phi=1.0) should only be reached when the task is confirmed successful
+4. You must output valid JSON"""
 
         return prompt
     

@@ -1490,28 +1490,29 @@ class RayPPOTrainer:
                             traj_uids = batch.non_tensor_batch.get('traj_uid', [])
                             uids = batch.non_tensor_batch.get('uid', [])
                             
-                            # 构建 uid -> expert_trajectory 映射
+                            # 构建 traj_uid 映射（traj_uid 与 tasks/expert_trajectories 都是 per-trajectory，一一对应）
                             unique_uids = list(dict.fromkeys(uids))  # 保持顺序的去重
-                            uid_to_expert = {}
-                            for i, uid in enumerate(unique_uids):
-                                if i < len(expert_trajectories):
-                                    uid_to_expert[uid] = expert_trajectories[i]
-                            
-                            # 构建 traj_uid -> task 映射（traj_uid 与 tasks 都是 per-trajectory，一一对应）
                             unique_traj_uids_for_task = list(dict.fromkeys(traj_uids))
+                            
                             traj_uid_to_task = {}
+                            traj_uid_to_expert = {}
                             for i, t_uid in enumerate(unique_traj_uids_for_task):
                                 if i < len(tasks):
                                     traj_uid_to_task[t_uid] = tasks[i]
+                                if i < len(expert_trajectories):
+                                    traj_uid_to_expert[t_uid] = expert_trajectories[i]
                             
-                            # 为 milestone 生成构建 uid -> task（取每个 uid 组的第一条轨迹的 task）
+                            # 为 milestone 生成构建 uid -> task/expert（取每个 uid 组的第一条轨迹）
                             uid_to_task = {}
+                            uid_to_expert = {}
                             for uid in unique_uids:
                                 for j, u in enumerate(uids):
                                     if u == uid:
                                         t_uid = traj_uids[j]
                                         if t_uid in traj_uid_to_task:
                                             uid_to_task[uid] = traj_uid_to_task[t_uid]
+                                        if t_uid in traj_uid_to_expert:
+                                            uid_to_expert[uid] = traj_uid_to_expert[t_uid]
                                         break
                             
                             print(f"[MilestoneGAE] Task mapping: {len(traj_uid_to_task)} traj_uid->task, "

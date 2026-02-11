@@ -636,6 +636,77 @@ class TrajectoryCollector:
             print(f"[Rollout] Failed to format policy trajectories: {e}")
             gen_batch_output.meta_info["formatted_policy_trajectories"] = []
         
+        # ==================== Build PipelineData (Two-Level Model) ====================
+        # Consolidates query-level (task, expert) and trajectory-level (reward, success, policy)
+        # data into a typed, FK-linked structure for Milestone GAE.
+        try:
+            from rlvmr.pipeline_data import PipelineData, QueryRecord, TrajectoryRecord
+            
+            n_trajs = len(total_traj_uid)
+            formatted_policy_trajs = gen_batch_output.meta_info.get("formatted_policy_trajectories", [])
+            
+            # Step A: Source alignment assertions — crash with diagnostics, not silent misalignment
+            assert n_trajs == len(tasks), (
+                f"traj_uid({n_trajs}) vs tasks({len(tasks)}) mismatch"
+            )
+            assert n_trajs == len(expert_trajectories), (
+                f"traj_uid({n_trajs}) vs expert_trajs({len(expert_trajectories)}) mismatch"
+            )
+            assert n_trajs == len(total_episode_rewards), (
+                f"traj_uid({n_trajs}) vs rewards({len(total_episode_rewards)}) mismatch"
+            )
+            assert n_trajs == len(formatted_policy_trajs), (
+                f"traj_uid({n_trajs}) vs policy_trajs({len(formatted_policy_trajs)}) mismatch"
+            )
+            
+            # Step B: Extract traj_uid → uid mapping from per-step data
+            # uid is per-step in non_tensor_batch; same traj_uid always maps to same uid.
+            uids_per_step = gen_batch_output.non_tensor_batch.get('uid', [])
+            traj_uids_per_step = gen_batch_output.non_tensor_batch.get('traj_uid', [])
+            traj_uid_to_uid = {}
+            for i in range(len(traj_uids_per_step)):
+                t = str(traj_uids_per_step[i])
+                if t not in traj_uid_to_uid:
+                    traj_uid_to_uid[t] = str(uids_per_step[i])
+            
+            # Step C: Extract per-trajectory success from success_evaluator output
+            # success_evaluator() returns Dict[str, np.ndarray] with per-trajectory values
+            success_array = total_success.get("success_rate", np.zeros(n_trajs))
+            
+            # Step D: Build two-level PipelineData
+            queries = {}
+            trajectories = {}
+            
+            for traj_idx, t_uid in enumerate(total_traj_uid):
+                t_uid_str = str(t_uid)
+                uid_str = traj_uid_to_uid[t_uid_str]  # strict: KeyError if missing
+                
+                # Query-level: deduplicate (first-seen wins; all copies within a
+                # rollout group are identical since they share the same env/task)
+                if uid_str not in queries:
+                    queries[uid_str] = QueryRecord(
+                        uid=uid_str,
+                        task=tasks[traj_idx],
+                        expert_trajectory=expert_trajectories[traj_idx],
+                    )
+                
+                # Trajectory-level: always unique
+                trajectories[t_uid_str] = TrajectoryRecord(
+                    traj_uid=t_uid_str,
+                    uid=uid_str,
+                    policy_trajectory=formatted_policy_trajs[traj_idx],
+                    episode_reward=float(total_episode_rewards[traj_idx]),
+                    success=bool(success_array[traj_idx]),
+                )
+            
+            pipeline_data = PipelineData(queries=queries, trajectories=trajectories)
+            gen_batch_output.meta_info["pipeline_data"] = pipeline_data
+            print(f"[PipelineData] Built: {len(queries)} queries, {len(trajectories)} trajectories")
+        except Exception as e:
+            print(f"[PipelineData] Failed to build: {e}")
+            import traceback
+            traceback.print_exc()
+        
         # Save trajectories to disk if saver is enabled
         if self.trajectory_saver is not None and is_train:
             try:

@@ -165,40 +165,39 @@ def compute_milestone_gae_advantage(
 
 def compute_milestone_gae_from_batch(
     batch_data: Any,
-    phis_dict: Dict[str, List[float]],
     traj_index: np.ndarray,
     response_mask: torch.Tensor,
+    pipeline_data: Any,  # PipelineData — typed as Any to avoid circular import at module load
     gamma: float = 0.99,
     lam: float = 0.95,
     cost: float = 0.05,
     norm_adv_by_std: bool = True,
     epsilon: float = 1e-8,
-    episode_rewards: Optional[np.ndarray] = None,
-    success_flags: Optional[np.ndarray] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
     """
-    从 batch 数据计算 Milestone-Guided GAE (兼容 verl 框架)
+    Compute Milestone-Guided GAE from batch data using PipelineData.
+    
+    Per-trajectory data (phis, episode_reward, success) is read directly from
+    pipeline_data.trajectories[traj_uid] via type-safe field access.
     
     Args:
-        batch_data: verl 框架的 batch 数据
-        phis_dict: 势能值字典，以 traj_uid 为键，值为 [phi_0, phi_1, ...]
-        traj_index: 轨迹索引数组 (traj_uid 字符串)
-        response_mask: 响应掩码
-        gamma, lam, cost: GAE 参数
-        norm_adv_by_std: 是否按标准差归一化
-        epsilon: 数值稳定性小量
-        episode_rewards: 每条轨迹的总奖励 (来自环境, e.g., 10 for success)
-        success_flags: 每条轨迹是否成功的标志
+        batch_data: verl framework batch data
+        traj_index: trajectory index array (traj_uid strings, per-step)
+        response_mask: response mask
+        pipeline_data: PipelineData with queries and trajectories
+        gamma, lam, cost: GAE parameters
+        norm_adv_by_std: whether to normalize by standard deviation
+        epsilon: numerical stability
     
     Returns:
-        advantages: token-level 优势值 (batch_size, seq_len)
-        returns: token-level 回报值
-        details: 详细信息
+        advantages: token-level advantages (batch_size, seq_len)
+        returns: token-level returns
+        details: diagnostic info dict
     """
     device = response_mask.device
     batch_size, seq_len = response_mask.shape
     
-    # 获取唯一的轨迹索引 (保持原始出现顺序，避免 np.unique 字母排序破坏与 episode_rewards 的对应关系)
+    # Get unique trajectory IDs (preserve insertion order, avoid np.unique alphabetical sort)
     seen = set()
     unique_trajs = []
     for t in traj_index:
@@ -206,12 +205,12 @@ def compute_milestone_gae_from_batch(
             seen.add(t)
             unique_trajs.append(t)
     
-    # 存储每个 step 的优势值
+    # Per-step storage
     step_advantages = torch.zeros(batch_size, dtype=torch.float32, device=device)
     step_returns = torch.zeros(batch_size, dtype=torch.float32, device=device)
     assigned_mask = torch.zeros(batch_size, dtype=torch.bool, device=device)
     
-    # 对每条轨迹计算 GAE
+    # Per-trajectory GAE computation
     traj_details = []
     fallback_count = 0
     for traj_idx, traj_id in enumerate(unique_trajs):
@@ -221,42 +220,37 @@ def compute_milestone_gae_from_batch(
         if len(indices) == 0:
             continue
         
-        # 获取该轨迹的 phis (使用字典查找)
-        if traj_id in phis_dict:
-            phis = phis_dict[traj_id]
+        # Unified str conversion for dict key consistency (user note #2)
+        traj_id_str = str(traj_id)
+        
+        # Read per-trajectory data from PipelineData
+        traj_record = pipeline_data.trajectories.get(traj_id_str)
+        if traj_record is not None:
+            phis = traj_record.phis if traj_record.phis is not None else None
+            total_reward = traj_record.episode_reward
+            success = traj_record.success
         else:
-            # Fallback: 使用线性增长
-            phis = [i / len(indices) for i in range(len(indices))]
+            phis = None
+            total_reward = 0.0
+            success = False
+        
+        # Phis fallback: linear growth if not available
+        if phis is None:
+            phis = [i / max(len(indices), 1) for i in range(len(indices))]
             fallback_count += 1
         
-        # 确保长度匹配
+        # Ensure length matches
         T = len(indices)
         if len(phis) < T:
             phis = phis + [phis[-1] if phis else 0.0] * (T - len(phis))
         phis = phis[:T]
         
-        # ==================== 真实奖励提取 ====================
-        # 获取该轨迹的总奖励（来自环境）
-        # 使用 traj_idx (整数索引) 访问 episode_rewards 而非 traj_id (UUID 字符串)
-        if episode_rewards is not None and traj_idx < len(episode_rewards):
-            total_reward = float(episode_rewards[traj_idx])
-        else:
-            # Fallback: 如果没有提供，根据最终 phi 判断
-            total_reward = 10.0 if (phis and phis[-1] >= 0.99) else 0.0
-        
-        # 获取该轨迹是否成功
-        if success_flags is not None and traj_idx < len(success_flags):
-            success = bool(success_flags[traj_idx])
-        else:
-            # Fallback: 根据奖励判断（ALFWorld: r=10 表示成功）
-            success = total_reward >= 10.0
-        
-        # 稀疏奖励分配：只在最后一步给予奖励
+        # Sparse reward: only at last step
         rewards = [0.0] * T
         if T > 0:
-            rewards[-1] = total_reward  # 最后一步获得全部奖励
+            rewards[-1] = total_reward
         
-        done = True  # 假设都是完整轨迹
+        done = True  # assume complete trajectories
         
         adv, ret = compute_milestone_gae(
             phis=phis,
@@ -268,7 +262,7 @@ def compute_milestone_gae_from_batch(
             cost=cost,
         )
         
-        # 写入对应位置
+        # Write into per-step arrays
         for i, idx in enumerate(indices):
             if i < len(adv):
                 step_advantages[idx] = adv[i]
@@ -276,7 +270,7 @@ def compute_milestone_gae_from_batch(
                 assigned_mask[idx] = True
         
         traj_details.append({
-            "traj_id": str(traj_id),  # traj_id 是 UUID 字符串
+            "traj_id": traj_id_str,
             "length": T,
             "success": success,
             "total_reward": total_reward,

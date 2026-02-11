@@ -1490,18 +1490,36 @@ class RayPPOTrainer:
                             traj_uids = batch.non_tensor_batch.get('traj_uid', [])
                             uids = batch.non_tensor_batch.get('uid', [])
                             
-                            # 构建 uid -> expert_trajectory / task 映射
+                            # 构建 uid -> expert_trajectory 映射
                             unique_uids = list(dict.fromkeys(uids))  # 保持顺序的去重
                             uid_to_expert = {}
-                            uid_to_task = {}
                             for i, uid in enumerate(unique_uids):
                                 if i < len(expert_trajectories):
                                     uid_to_expert[uid] = expert_trajectories[i]
-                                # Fix: 通过 uids 数组反查该 uid 首次出现的位置，
-                                # 用该位置索引 tasks（避免 unique_uids 和 tasks 长度不匹配）
-                                first_idx = next((j for j, u in enumerate(uids) if u == uid), None)
-                                if first_idx is not None and first_idx < len(tasks):
-                                    uid_to_task[uid] = tasks[first_idx]
+                            
+                            # 构建 traj_uid -> task 映射（traj_uid 与 tasks 都是 per-trajectory，一一对应）
+                            unique_traj_uids_for_task = list(dict.fromkeys(traj_uids))
+                            traj_uid_to_task = {}
+                            for i, t_uid in enumerate(unique_traj_uids_for_task):
+                                if i < len(tasks):
+                                    traj_uid_to_task[t_uid] = tasks[i]
+                            
+                            # 为 milestone 生成构建 uid -> task（取每个 uid 组的第一条轨迹的 task）
+                            uid_to_task = {}
+                            for uid in unique_uids:
+                                for j, u in enumerate(uids):
+                                    if u == uid:
+                                        t_uid = traj_uids[j]
+                                        if t_uid in traj_uid_to_task:
+                                            uid_to_task[uid] = traj_uid_to_task[t_uid]
+                                        break
+                            
+                            print(f"[MilestoneGAE] Task mapping: {len(traj_uid_to_task)} traj_uid->task, "
+                                  f"{len(uid_to_task)} uid->task, tasks={len(tasks)}, "
+                                  f"unique_traj_uids={len(unique_traj_uids_for_task)}, unique_uids={len(unique_uids)}")
+                            if uid_to_task:
+                                sample_uid = list(uid_to_task.keys())[0]
+                                print(f"  Sample task: '{uid_to_task[sample_uid][:80]}'")
                             
                             # 生成里程碑（并行调用，每个 query 1 次 API）
                             uid_to_milestones = {}
@@ -1554,7 +1572,7 @@ class RayPPOTrainer:
                                     
                                     # 获取里程碑
                                     milestones = uid_to_milestones.get(query_uid, [])
-                                    task_desc = uid_to_task.get(query_uid, "")
+                                    task_desc = traj_uid_to_task.get(traj_uid, "")
                                     
                                     # 获取策略轨迹
                                     policy_traj = traj_uid_to_policy.get(traj_uid, {})

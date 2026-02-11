@@ -37,33 +37,33 @@ class MilestoneGenerator:
     根据专家轨迹自动识别关键阶段并生成里程碑定义。
     """
     
-    PROMPT_TEMPLATE = """你是一个任务分解专家。
+    PROMPT_TEMPLATE = """You are a task decomposition expert.
 
-## 任务描述
+## Task Description
 {task_description}
 
-## 专家成功轨迹
+## Expert Successful Trajectory
 {expert_trajectory}
 
-## 任务
-请分析这条成功的专家轨迹，识别任务完成过程中的关键阶段/里程碑。
+## Instructions
+Analyze this successful expert trajectory and identify key stages/milestones in the task completion process.
 
-要求：
-1. 提取 {num_milestones} 个关键里程碑，从初始状态到任务完成
-2. 每个里程碑应该是任务进展的明确标志
-3. 里程碑应该是可观测的（能从观察中判断是否达成）
-4. phi 值应该均匀分布，从 0.0 递增到 1.0（最后一个必须是 1.0）
-5. 判定标准要具体、可操作
+Requirements:
+1. Extract {num_milestones} key milestones, from the initial state to task completion
+2. Each milestone should be a clear indicator of task progress
+3. Milestones should be observable (can be determined from environment observations)
+4. Phi values should be evenly distributed, increasing from 0.0 to 1.0 (the last one must be 1.0)
+5. Criteria should be specific and actionable, referencing exact observation text when possible
 
-输出格式 (严格 JSON):
+Output format (strict JSON):
 {{
   "milestones": [
-    {{"id": "M1", "name": "里程碑名称", "phi": 0.2, "criteria": "判定标准：具体的观察条件"}},
-    {{"id": "M2", "name": "里程碑名称", "phi": 0.4, "criteria": "判定标准：具体的观察条件"}},
+    {{"id": "M1", "name": "Milestone name", "phi": 0.2, "criteria": "Criteria: specific observation condition"}},
+    {{"id": "M2", "name": "Milestone name", "phi": 0.4, "criteria": "Criteria: specific observation condition"}},
     ...
-    {{"id": "M{num_milestones}", "name": "任务完成", "phi": 1.0, "criteria": "判定标准：任务成功完成"}}
+    {{"id": "M{num_milestones}", "name": "Task complete", "phi": 1.0, "criteria": "Criteria: task successfully completed"}}
   ],
-  "reasoning": "简要说明里程碑划分依据"
+  "reasoning": "Brief explanation of milestone decomposition"
 }}"""
 
     def __init__(
@@ -277,14 +277,14 @@ class MilestoneGenerator:
         return results
 
     def _get_default_milestones(self) -> List[Dict[str, Any]]:
-        """获取默认里程碑（fallback）"""
+        """Get default milestones (fallback)"""
         n = self.num_milestones
         return [
             {
                 "id": f"M{i+1}",
-                "name": f"阶段 {i+1}",
+                "name": f"Stage {i+1}",
                 "phi": round((i + 1) / n, 2),
-                "criteria": f"完成约 {int((i+1)/n*100)}% 的任务进度",
+                "criteria": f"Approximately {int((i+1)/n*100)}% of the task completed",
             }
             for i in range(n)
         ]

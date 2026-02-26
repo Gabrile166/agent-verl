@@ -22,10 +22,15 @@ def load_milestone_template(env_name: str) -> Dict[str, Any]:
     Returns:
         里程碑模板字典
     """
+    if not env_name or env_name.lower() in ['none', 'null', 'empty']:
+        print(f"[MilestoneTemplate] Skipping static template matching for {env_name}.")
+        return {"default_milestones": []}
+
     template_path = os.path.join(TEMPLATE_DIR, f'{env_name}.json')
     
     if not os.path.exists(template_path):
-        raise FileNotFoundError(f"Milestone template not found: {template_path}")
+        print(f"[MilestoneTemplate] Warning: Milestone template not found: {template_path}. Proceeding with dynamic milestones only.")
+        return {"default_milestones": []}
     
     with open(template_path, 'r', encoding='utf-8') as f:
         return json.load(f)

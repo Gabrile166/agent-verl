@@ -368,3 +368,8 @@ env:
   webshop:
     use_small: True
     human_goals: False
+  sciworld:
+    generalization_level: 0
+    simplifications_preset: "easy"
+    env_step_limit: 100
+    jar_path: null

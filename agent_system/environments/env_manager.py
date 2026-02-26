@@ -802,7 +802,7 @@ class SciWorldEnvironmentManager(EnvironmentManagerBase):
         self.meta_think = self.config is not None and self.config.env.sciworld.meta_think if hasattr(self.config.env, 'sciworld') and hasattr(self.config.env.sciworld, 'meta_think') else False
         super().__init__(envs, projection_f, config)
 
-    def reset(self):
+    def reset(self, kwargs=None):
         text_obs, infos = self.envs.reset()
 
         # Reset history buffer first

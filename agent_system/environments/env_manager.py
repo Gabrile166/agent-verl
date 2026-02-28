@@ -962,12 +962,74 @@ class SciWorldEnvironmentManager(EnvironmentManagerBase):
 
     def get_expert_trajectories(self) -> List[List[Dict]]:
         """
-        获取当前缓存的 expert 轨迹。
+        获取当前 episode 的专家轨迹。
+        
+        通过调用 self.envs.get_expert_trajectories() 获取按 group 索引的轨迹，
+        然后将其映射到每个 Policy 样本上（与 AlfWorld 逻辑一致）。
         
         Returns:
-            List[List[Dict]]: 每个环境的 expert 轨迹列表（与 AlfWorld 格式一致）
+            List of expert trajectories (对应 batch 中的每个样本)
         """
-        return self.expert_trajectories
+        if not hasattr(self.envs, 'get_expert_trajectories'):
+            return [[] for _ in range(len(self.tasks))]
+        
+        # 1. 获取原始 Expert 轨迹: {group_idx: trajectory_with_metadata}
+        expert_trajs_dict = self.envs.get_expert_trajectories()
+        
+        if not expert_trajs_dict:
+            return [[] for _ in range(len(self.tasks))]
+        
+        # 2. 映射到 Policy 样本（与 AlfWorld 保持一致）
+        mapped_trajectories = []
+        
+        if hasattr(self.envs, 'policy_indices') and hasattr(self.envs, 'workers_per_group'):
+            for k in range(len(self.tasks)):
+                if k < len(self.envs.policy_indices):
+                    worker_idx = self.envs.policy_indices[k]
+                    group_idx = worker_idx // self.envs.workers_per_group
+                    
+                    # 获取该组的 Expert 轨迹
+                    traj_data = expert_trajs_dict.get(group_idx, {})
+                    # SciWorld 返回的是带 metadata 的 dict，提取 steps
+                    if isinstance(traj_data, dict):
+                        traj = traj_data.get('steps', [])
+                    else:
+                        traj = traj_data if isinstance(traj_data, list) else []
+                    
+                    # 截断填充（与 AlfWorld 一致）
+                    truncated_traj = self._truncate_expert_trajectory(traj)
+                    mapped_trajectories.append(truncated_traj)
+                else:
+                    mapped_trajectories.append([])
+        else:
+            mapped_trajectories = [[] for _ in range(len(self.tasks))]
+        
+        print(f"[SciWorld Expert] Collected {sum(1 for t in mapped_trajectories if t)} non-empty expert trajectories "
+              f"out of {len(mapped_trajectories)} policy envs")
+        
+        return mapped_trajectories
+    
+    def _truncate_expert_trajectory(self, traj: List[Dict]) -> List[Dict]:
+        """
+        截断 Expert 轨迹，移除任务完成后的重复填充步骤。
+        与 AlfWorld 的逻辑一致。
+        """
+        if len(traj) <= 1:
+            return traj
+        
+        for i in range(1, len(traj)):
+            current_action = traj[i].get('action', '')
+            prev_action = traj[i - 1].get('action', '')
+            
+            if current_action == prev_action:
+                is_padding = all(
+                    traj[j].get('action', '') == current_action
+                    for j in range(i, min(i + 3, len(traj)))
+                )
+                if is_padding:
+                    return traj[:i]
+        
+        return traj
         
     def get_policy_indices(self):
         if hasattr(self.envs, 'policy_indices'):

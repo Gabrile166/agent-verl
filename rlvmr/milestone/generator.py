@@ -46,22 +46,23 @@ class MilestoneGenerator:
 {expert_trajectory}
 
 ## Instructions
-Analyze this successful expert trajectory and identify key stages/milestones in the task completion process.
+Analyze this successful expert trajectory and decompose the task into key milestones marking progress from the initial state to task completion.
 
 Requirements:
-1. Extract {num_milestones} key milestones, from the initial state to task completion
-2. Each milestone should be a clear indicator of task progress
-3. Milestones should be observable (can be determined from environment observations)
-4. Phi values should be evenly distributed, increasing from 0.0 to 1.0 (the last one must be 1.0)
-5. Criteria should be specific and actionable, referencing exact observation text when possible
+1. Generate between 4 and 10 milestones depending on task complexity — simpler tasks need fewer, complex multi-stage tasks need more
+2. Each milestone should describe **what was accomplished** and **what state was reached** (e.g., "Agent has arrived at the living room and picked up the metal pot", "The circuit is fully connected and the light bulb is on")
+3. Criteria must be **state-based, not step-based**: do NOT reference step numbers (e.g., "Step 12", "after step 30"). Different agents may reach the same state at different steps
+4. Milestones should be **verifiable from environment observations** — describe conditions that can be checked against observation text at any step
+5. Phi values should increase from 0.0 to 1.0. Distribute them based on task difficulty of each stage, not necessarily evenly. The last milestone must have phi=1.0
+6. Order milestones by logical task progression, not by step index
 
 Output format (strict JSON):
 {{
   "milestones": [
-    {{"id": "M1", "name": "Milestone name", "phi": 0.2, "criteria": "Criteria: specific observation condition"}},
-    {{"id": "M2", "name": "Milestone name", "phi": 0.4, "criteria": "Criteria: specific observation condition"}},
+    {{"id": "M1", "name": "Milestone name", "phi": <float>, "criteria": "Criteria: Agent has [accomplished X] and [reached state Y]"}},
+    {{"id": "M2", "name": "Milestone name", "phi": <float>, "criteria": "Criteria: Agent has [accomplished X] and [reached state Y]"}},
     ...
-    {{"id": "M{num_milestones}", "name": "Task complete", "phi": 1.0, "criteria": "Criteria: task successfully completed"}}
+    {{"id": "M<N>", "name": "Milestone name", "phi": 1.0, "criteria": "Criteria: Agent has [completed final objective] and [environment shows final state]"}}
   ],
   "reasoning": "Brief explanation of milestone decomposition"
 }}"""
@@ -73,7 +74,9 @@ Output format (strict JSON):
         api_key: str = "EMPTY",
         temperature: float = 0.3,
         max_retries: int = 3,
-        num_milestones: int = 5,
+        min_milestones: int = 4,
+        max_milestones: int = 10,
+        num_milestones: int = 5,  # kept for backward compat (used in default fallback)
     ):
         """
         初始化 MilestoneGenerator
@@ -82,9 +85,11 @@ Output format (strict JSON):
             base_urls: LLM API 地址列表 (支持多 URL 负载均衡)
             model: 模型名称
             api_key: API 密钥
-            temperature: 采样温度（生成时稍高一些）
+            temperature: 采样温度
             max_retries: 最大重试次数
-            num_milestones: 期望的里程碑数量
+            min_milestones: 最少里程碑数量
+            max_milestones: 最多里程碑数量
+            num_milestones: 默认里程碑数量 (用于 fallback)
         """
         if OpenAI is None:
             raise ImportError("openai package is required. Install with: pip install openai")
@@ -97,6 +102,8 @@ Output format (strict JSON):
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
+        self.min_milestones = min_milestones
+        self.max_milestones = max_milestones
         self.num_milestones = num_milestones
         self._call_index = 0  # 用于轮询负载均衡
     
@@ -124,7 +131,6 @@ Output format (strict JSON):
         return self.PROMPT_TEMPLATE.format(
             task_description=task_description,
             expert_trajectory=traj_str,
-            num_milestones=self.num_milestones,
         )
     
     def _parse_response(self, response_text: str) -> GeneratedMilestones:
@@ -139,10 +145,20 @@ Output format (strict JSON):
             milestones = data.get("milestones", [])
             reasoning = data.get("reasoning", "")
             
+            # 验证里程碑数量 (4-10)
+            if len(milestones) < self.min_milestones:
+                raise ValueError(f"Too few milestones: {len(milestones)} < {self.min_milestones}")
+            if len(milestones) > self.max_milestones:
+                milestones = milestones[:self.max_milestones]  # 截断而非报错
+            
             # 验证里程碑格式
             for m in milestones:
                 if not all(k in m for k in ["id", "name", "phi", "criteria"]):
                     raise ValueError(f"Invalid milestone format: {m}")
+            
+            # 确保最后一个里程碑 phi=1.0
+            if milestones and milestones[-1]["phi"] != 1.0:
+                milestones[-1]["phi"] = 1.0
             
             return GeneratedMilestones(
                 milestones=milestones,

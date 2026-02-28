@@ -15,7 +15,7 @@ def compute_reward(info, multi_modal=False):
     reward = 10.0 * float(info['won'])
     return reward
 
-def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar_path, split=None, variations_idx=None, is_expert=False):
+def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar_path, split=None, variations_idx=None, is_expert=False, shared_port=None):
     """
     SciWorld worker process.
     
@@ -27,9 +27,16 @@ def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar
     Disambiguation handling:
     - Filters out pure digit responses ("0", "1", etc.) used for disambiguation
     - These are internal SciWorld mechanics, not meaningful actions
+    
+    Args:
+        shared_port: If provided, connect to existing JVM on this port (shared mode).
+                     If None, launch a new JVM process (standalone mode).
     """
     from scienceworld import ScienceWorldEnv
-    env = ScienceWorldEnv("", jar_path, envStepLimit=env_step_limit)
+    if shared_port is not None:
+        env = ScienceWorldEnv.from_shared_gateway(shared_port, envStepLimit=env_step_limit)
+    else:
+        env = ScienceWorldEnv("", jar_path, envStepLimit=env_step_limit)
     taskNames = env.get_task_names()
     random.seed(seed)
     
@@ -186,7 +193,8 @@ class SciWorldMultiProcessEnv(gym.Env):
         env_step_limit: int = 100,
         jar_path: str = None,
         variations_idx: list = None,
-        expert_in_group: bool = False
+        expert_in_group: bool = False,
+        shared_jvm: bool = True
     ) -> None:
         super().__init__()
         self.group_n = group_n
@@ -215,6 +223,23 @@ class SciWorldMultiProcessEnv(gym.Env):
         self.policy_indices = []
         self.expert_indices = []
         
+        # --- Shared JVM mode: launch 1 JVM per group instead of 1 per worker ---
+        self.shared_jvm = shared_jvm
+        self.group_jvm_procs = []  # JVM Popen objects for cleanup
+        self.group_ports = {}     # group_idx -> port
+        
+        if shared_jvm:
+            from py4j.java_gateway import launch_gateway
+            from scienceworld.constants import BASEPATH, JAR_PATH
+            _jar = jar_path or JAR_PATH
+            for g in range(env_num):
+                port, proc = launch_gateway(
+                    classpath=_jar, die_on_exit=True, cwd=BASEPATH,
+                    javaopts=['-Xmx4G'], return_proc=True)
+                self.group_ports[g] = port
+                self.group_jvm_procs.append(proc)
+            print(f"[SciWorldEnvs] Shared JVM mode: launched {env_num} JVMs (ports: {list(self.group_ports.values())})")
+        
         ctx = mp.get_context('spawn')
         for i in range(self.num_processes):
             parent_remote, child_remote = ctx.Pipe()
@@ -234,10 +259,14 @@ class SciWorldMultiProcessEnv(gym.Env):
             # Important: Expert and Policy in same group must share base seed to pick same task
             seed_i = seed + group_idx
             
+            # Determine shared port for this worker's group
+            shared_port = self.group_ports.get(group_idx) if shared_jvm else None
+            
             worker = ctx.Process(
                 target=_worker,
                 args=(child_remote, seed_i, self.task_nums, self.simplifications_preset, 
-                      self.env_step_limit, self.jar_path, self.split, self.variations_idx, is_expert),
+                      self.env_step_limit, self.jar_path, self.split, self.variations_idx,
+                      is_expert, shared_port),
                 daemon=True,
             )
             worker.start()
@@ -373,6 +402,14 @@ class SciWorldMultiProcessEnv(gym.Env):
             remote.send(('close', None))
         for worker in self._workers:
             worker.join()
+        # Shared JVM mode: kill group JVM processes
+        for proc in getattr(self, 'group_jvm_procs', []):
+            if proc.poll() is None:
+                try:
+                    proc.stdin.write("\n".encode("utf-8"))
+                    proc.stdin.flush()
+                except Exception:
+                    proc.terminate()
         self._closed = True
 
     def __del__(self):
@@ -388,7 +425,8 @@ def build_sciworld_envs(
     env_step_limit: int = 100,
     jar_path: str = None,
     variations_idx: list = None,
-    expert_in_group: bool = False
+    expert_in_group: bool = False,
+    shared_jvm: bool = True
 ):
     return SciWorldMultiProcessEnv(
         seed=seed,
@@ -400,5 +438,6 @@ def build_sciworld_envs(
         env_step_limit=env_step_limit,
         jar_path=jar_path,
         variations_idx=variations_idx,
-        expert_in_group=expert_in_group
+        expert_in_group=expert_in_group,
+        shared_jvm=shared_jvm
     ) 

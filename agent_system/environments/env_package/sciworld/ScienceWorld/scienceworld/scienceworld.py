@@ -83,6 +83,33 @@ class ScienceWorldEnv:
         self.goldPathGenerated = False
 
         self._obj_tree_tempdir = tempfile.TemporaryDirectory()
+        self._shared_mode = False  # standalone JVM mode
+
+    @classmethod
+    def from_shared_gateway(cls, port, envStepLimit=100):
+        """Connect to an existing JVM gateway (shared mode).
+        
+        In shared mode, multiple ScienceWorldEnv instances connect to the same
+        JVM process. Each gets its own PythonInterface instance for state isolation.
+        close() will only disconnect, not kill the shared JVM.
+        
+        Args:
+            port: The port of the already-running JVM gateway.
+            envStepLimit: Maximum steps per episode.
+        """
+        obj = cls.__new__(cls)
+        obj._gateway = JavaGateway(
+            gateway_parameters=GatewayParameters(auto_field=True, port=port))
+        obj.server = obj._gateway.jvm.scienceworld.runtime.pythonapi.PythonInterface()
+        obj._shared_mode = True
+        obj.lastStepScore = 0
+        obj.taskName = None
+        obj.envStepLimit = envStepLimit
+        obj.goldPathGenerated = False
+        obj._obj_tree_tempdir = tempfile.TemporaryDirectory()
+        obj.runHistories = {}
+        logger.info("ScienceWorld shared client connected on port %d", port)
+        return obj
 
     # Ask the simulator to load an environment from a script
     def load(self, taskName: str, variationIdx: int = 0, simplificationStr: str = "",
@@ -149,13 +176,19 @@ class ScienceWorldEnv:
         return observation, info
 
     def close(self) -> None:
-        self._gateway.shutdown()
-
-        # According to https://github.com/py4j/py4j/issues/320#issuecomment-553599210
-        # we need to send a newline to the process to make it exit.
-        if self._gateway.java_process.poll() is None:
-            self._gateway.java_process.stdin.write("\n".encode("utf-8"))
-            self._gateway.java_process.stdin.flush()
+        if getattr(self, '_shared_mode', False):
+            # Shared mode: disconnect only, don't kill the JVM
+            try:
+                self._gateway.close()
+            except Exception:
+                pass
+        else:
+            self._gateway.shutdown()
+            # According to https://github.com/py4j/py4j/issues/320#issuecomment-553599210
+            # we need to send a newline to the process to make it exit.
+            if self._gateway.java_process.poll() is None:
+                self._gateway.java_process.stdin.write("\n".encode("utf-8"))
+                self._gateway.java_process.stdin.flush()
 
     def __del__(self):
         self.close()

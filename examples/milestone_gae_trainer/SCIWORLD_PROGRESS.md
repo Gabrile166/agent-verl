@@ -163,3 +163,22 @@ bash examples/milestone_gae_trainer/run_sciworld.sh
 ulimit -u     # max user processes
 ulimit -u 65535  # increase if needed
 ```
+之前跑 ALFWorld 不崩，现在跑 SciWorld 一直崩，根本原因是资源压力完全不同：
+
+ALFWorld vs SciWorld 资源对比
+ALFWorld	SciWorld
+每个环境实例	轻量 Python 对象	一个完整的 Java JVM 进程
+144 个 worker	~144 个 Python 线程（共享内存）	144 个 JVM 进程（每个 ~200-500MB）
+额外线程	很少	每个 JVM 内部还有 GC 线程、py4j 网关线程等
+总内存占用	~几 GB	几十 GB
+总进程/线程数	~几百	上千
+WandB 为什么挂
+WandB 的 Go 后台进程（wandb-core）通过 Unix Socket 跟 Python SDK 通信。这个 Go 进程：
+
+被 OOM Killer 杀了 — 系统内存被 144 个 JVM 吃光，Linux 的 OOM Killer 优先杀"看起来不重要"的进程，wandb-core 就成了牺牲品
+或者线程耗尽连带挂了 — ulimit -u 限制被打满后，Go runtime 的 goroutine 调度器也会异常退出
+或者 Socket fd 被回收了 — 文件描述符数量达到上限（ulimit -n），Go 进程的 Socket 被系统强制关闭
+之前跑 ALFWorld 时，系统资源很充裕，所以 WandB 从来不会遇到这些问题。SciWorld 把资源压到极限后，WandB 就变成最脆弱的环节了。
+
+根本解决
+刚刚加的 try/except 是止血方案（WandB 崩了训练不挂）。真正要解决的是之前讨论的 JVM 共享方案，把 144 个 JVM 降到 16 个，系统资源压力就回到 ALFWorld 的水平了，WandB 自然也不会再崩。

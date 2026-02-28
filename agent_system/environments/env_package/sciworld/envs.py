@@ -15,7 +15,7 @@ def compute_reward(info, multi_modal=False):
     reward = 10.0 * float(info['won'])
     return reward
 
-def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar_path, split=None, variations_idx=None, is_expert=False, shared_port=None):
+def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar_path, split=None, variations_idx=None, is_expert=False, shared_port=None, jvm_lock=None):
     """
     SciWorld worker process.
     
@@ -138,20 +138,27 @@ def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar
                 simplification_str = simplifications_preset if simplifications_preset else ""
                 
                 # Load with gold path generation if expert
-                env.load(taskName, task_variation, simplification_str, generateGoldPath=is_expert)
-                
-                if is_expert:
-                    try:
-                        gold_actions = env.get_gold_action_sequence()
-                        expert_trajectory = []
-                        step_index = 0
-                    except Exception as e:
-                        print(f"[SciWorld Expert] Error getting gold actions: {e}")
-                        gold_actions = []
-                        expert_trajectory = []
-                        step_index = 0
+                # Acquire JVM lock to prevent concurrent access to Scala singletons
+                if jvm_lock:
+                    jvm_lock.acquire()
+                try:
+                    env.load(taskName, task_variation, simplification_str, generateGoldPath=is_expert)
+                    
+                    if is_expert:
+                        try:
+                            gold_actions = env.get_gold_action_sequence()
+                            expert_trajectory = []
+                            step_index = 0
+                        except Exception as e:
+                            print(f"[SciWorld Expert] Error getting gold actions: {e}")
+                            gold_actions = []
+                            expert_trajectory = []
+                            step_index = 0
 
-                observation, info = env.reset()
+                    observation, info = env.reset()
+                finally:
+                    if jvm_lock:
+                        jvm_lock.release()
                 
                 # Store initial observation for expert trajectory
                 current_obs = observation
@@ -259,6 +266,8 @@ class SciWorldMultiProcessEnv(gym.Env):
                     javaopts=['-Xmx4G'], return_proc=True)
                 self.group_ports[g] = port
                 self.group_jvm_procs.append(proc)
+            # Per-group locks to serialize load/reset (Scala SimplifierProcessor$ is not thread-safe)
+            self.group_locks = {g: ctx.Lock() for g in range(env_num)}
             print(f"[SciWorldEnvs] Shared JVM mode: launched {env_num} JVMs (ports: {list(self.group_ports.values())})")
         
         ctx = mp.get_context('spawn')
@@ -280,14 +289,15 @@ class SciWorldMultiProcessEnv(gym.Env):
             # Important: Expert and Policy in same group must share base seed to pick same task
             seed_i = seed + group_idx
             
-            # Determine shared port for this worker's group
+            # Determine shared port and lock for this worker's group
             shared_port = self.group_ports.get(group_idx) if shared_jvm else None
+            jvm_lock = self.group_locks.get(group_idx) if shared_jvm else None
             
             worker = ctx.Process(
                 target=_worker,
                 args=(child_remote, seed_i, self.task_nums, self.simplifications_preset, 
                       self.env_step_limit, self.jar_path, self.split, self.variations_idx,
-                      is_expert, shared_port),
+                      is_expert, shared_port, jvm_lock),
                 daemon=True,
             )
             worker.start()

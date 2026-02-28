@@ -256,6 +256,8 @@ class SciWorldMultiProcessEnv(gym.Env):
         self.group_jvm_procs = []  # JVM Popen objects for cleanup
         self.group_ports = {}     # group_idx -> port
         
+        ctx = mp.get_context('spawn')
+        
         if shared_jvm:
             from py4j.java_gateway import launch_gateway
             from scienceworld.constants import BASEPATH, JAR_PATH
@@ -270,7 +272,6 @@ class SciWorldMultiProcessEnv(gym.Env):
             self.group_locks = {g: ctx.Lock() for g in range(env_num)}
             print(f"[SciWorldEnvs] Shared JVM mode: launched {env_num} JVMs (ports: {list(self.group_ports.values())})")
         
-        ctx = mp.get_context('spawn')
         for i in range(self.num_processes):
             parent_remote, child_remote = ctx.Pipe()
             

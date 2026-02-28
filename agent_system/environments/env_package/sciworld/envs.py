@@ -36,6 +36,7 @@ def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar
     if shared_port is not None:
         # Shared JVM mode: connect to existing JVM, create independent PythonInterface
         import tempfile
+        import types
         from py4j.java_gateway import JavaGateway, GatewayParameters
         env = ScienceWorldEnv.__new__(ScienceWorldEnv)
         env._gateway = JavaGateway(
@@ -47,6 +48,14 @@ def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar
         env.goldPathGenerated = False
         env._obj_tree_tempdir = tempfile.TemporaryDirectory()
         env.runHistories = {}
+        # Override close/del: disconnect only, don't kill the shared JVM
+        def _shared_close(self):
+            try:
+                self._gateway.close()
+            except Exception:
+                pass
+        env.close = types.MethodType(_shared_close, env)
+        env.__del__ = types.MethodType(lambda self: None, env)
     else:
         env = ScienceWorldEnv("", jar_path, envStepLimit=env_step_limit)
     taskNames = env.get_task_names()

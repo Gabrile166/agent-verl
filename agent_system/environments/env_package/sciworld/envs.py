@@ -252,34 +252,72 @@ class SciWorldMultiProcessEnv(gym.Env):
             print(f"[SciWorldEnvs] Expert Workers enabled: {len(self.expert_indices)} experts, {len(self.policy_indices)} policy workers.")
 
     def step(self, actions: list[str]):
-        if len(actions) != self.num_processes:
-            raise ValueError(
-                f'Expected {self.num_processes} actions, got {len(actions)}',
-            )
-        for remote, action in zip(self._parent_remotes, actions):
+        # If expert_in_group, pipeline sends POLICY-ONLY actions; expand for all workers
+        if self.expert_in_group:
+            if len(actions) != len(self.policy_indices):
+                raise ValueError(
+                    f'Expected {len(self.policy_indices)} policy actions, got {len(actions)}',
+                )
+            full_actions = [None] * self.num_processes
+            for i, policy_idx in enumerate(self.policy_indices):
+                full_actions[policy_idx] = actions[i]
+            for expert_idx in self.expert_indices:
+                full_actions[expert_idx] = "look around"  # Dummy action for expert
+        else:
+            if len(actions) != self.num_processes:
+                raise ValueError(
+                    f'Expected {self.num_processes} actions, got {len(actions)}',
+                )
+            full_actions = actions
+
+        for remote, action in zip(self._parent_remotes, full_actions):
             remote.send(('step', action))
-        obs_list, reward_list, done_list, info_list = [], [], [], []
+
+        all_obs, all_rewards, all_dones, all_infos = [], [], [], []
         for i, remote in enumerate(self._parent_remotes):
             obs, reward, done, info = remote.recv()
-            obs_list.append(obs)
-            reward_list.append(reward)
-            done_list.append(done)
-            info_list.append(info)
+            all_obs.append(obs)
+            all_rewards.append(reward)
+            all_dones.append(done)
+            all_infos.append(info)
             self.prev_available_actions[i] = info['available_actions']
             self.prev_possible_actions[i] = info["possible_actions"]
+
+        # Filter: return only policy worker results
+        if self.expert_in_group:
+            obs_list = [all_obs[i] for i in self.policy_indices]
+            reward_list = [all_rewards[i] for i in self.policy_indices]
+            done_list = [all_dones[i] for i in self.policy_indices]
+            info_list = [all_infos[i] for i in self.policy_indices]
+        else:
+            obs_list = all_obs
+            reward_list = all_rewards
+            done_list = all_dones
+            info_list = all_infos
+
         return obs_list, reward_list, done_list, info_list
 
     def reset(self):
         variations = [None for _ in range(self.num_processes)]
         for remote, variation in zip(self._parent_remotes, variations):
             remote.send(('reset', variation))
-        obs_list, info_list = [], []
+
+        all_obs, all_infos = [], []
         for i, remote in enumerate(self._parent_remotes):
             obs, info = remote.recv()
-            obs_list.append(obs)
-            info_list.append(info)
+            all_obs.append(obs)
+            all_infos.append(info)
             self.prev_available_actions[i] = info['available_actions']
             self.prev_possible_actions[i] = info["possible_actions"]
+
+        # Filter: return only policy worker results
+        if self.expert_in_group:
+            obs_list = [all_obs[i] for i in self.policy_indices]
+            info_list = [all_infos[i] for i in self.policy_indices]
+        else:
+            obs_list = all_obs
+            info_list = all_infos
+
         return obs_list, info_list
 
     def get_expert_trajectories(self):
@@ -312,14 +350,20 @@ class SciWorldMultiProcessEnv(gym.Env):
 
     @property
     def get_available_actions(self):
+        if self.expert_in_group:
+            return [self.prev_available_actions[i] for i in self.policy_indices]
         return self.prev_available_actions
 
     @property
     def get_admissible_commands(self):
+        if self.expert_in_group:
+            return [self.prev_available_actions[i] for i in self.policy_indices]
         return self.prev_available_actions
 
     @property
     def get_possible_actions(self):
+        if self.expert_in_group:
+            return [self.prev_possible_actions[i] for i in self.policy_indices]
         return self.prev_possible_actions
 
     def close(self):

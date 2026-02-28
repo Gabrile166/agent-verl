@@ -34,7 +34,19 @@ def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar
     """
     from scienceworld import ScienceWorldEnv
     if shared_port is not None:
-        env = ScienceWorldEnv.from_shared_gateway(shared_port, envStepLimit=env_step_limit)
+        # Shared JVM mode: connect to existing JVM, create independent PythonInterface
+        import tempfile
+        from py4j.java_gateway import JavaGateway, GatewayParameters
+        env = ScienceWorldEnv.__new__(ScienceWorldEnv)
+        env._gateway = JavaGateway(
+            gateway_parameters=GatewayParameters(auto_field=True, port=shared_port))
+        env.server = env._gateway.jvm.scienceworld.runtime.pythonapi.PythonInterface()
+        env.lastStepScore = 0
+        env.taskName = None
+        env.envStepLimit = env_step_limit
+        env.goldPathGenerated = False
+        env._obj_tree_tempdir = tempfile.TemporaryDirectory()
+        env.runHistories = {}
     else:
         env = ScienceWorldEnv("", jar_path, envStepLimit=env_step_limit)
     taskNames = env.get_task_names()

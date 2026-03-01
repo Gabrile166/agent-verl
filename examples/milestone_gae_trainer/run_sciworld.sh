@@ -119,7 +119,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     algorithm.gamma=0.95 \
     env.env_name=sciworld/ScienceWorldEnv \
-    env.sciworld.generalization_level=0 \
+    env.sciworld.generalization_level=1 \
     env.sciworld.env_step_limit=100 \
     env.seed=0 \
     env.max_steps=100 \

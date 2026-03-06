@@ -186,6 +186,20 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
         #     batch.non_tensor_batch["tool_callings"][unique_idx].min().item(),
         **({f"episode/{k}": v[0].item() for k, v in batch.non_tensor_batch.items() if "success_rate" in k}),
     }
+    
+    # === 成功/失败轨迹步数统计 ===
+    success_mask = batch.non_tensor_batch['success'][unique_idx]
+    episode_lengths = batch.non_tensor_batch['episode_lengths'][unique_idx]
+    
+    success_steps = episode_lengths[success_mask]
+    failure_steps = episode_lengths[~success_mask]
+    
+    if len(success_steps) > 0:
+        metrics["traj/success/steps"] = success_steps.mean().item()
+    if len(failure_steps) > 0:
+        metrics["traj/failure/steps"] = failure_steps.mean().item()
+    metrics["traj/success_rate"] = success_mask.float().mean().item()
+    
     return metrics
 
 

@@ -76,6 +76,57 @@ def _compute_response_info(batch: DataProto) -> Dict[str, Any]:
     )
 
 
+def _get_non_tensor_batch(batch: DataProto) -> Dict[str, np.ndarray]:
+    non_tensor_batch = getattr(batch, "non_tensor_batch", None)
+    return non_tensor_batch if isinstance(non_tensor_batch, dict) else {}
+
+
+def _get_unique_traj_info(batch: DataProto) -> tuple[np.ndarray, np.ndarray]:
+    non_tensor_batch = _get_non_tensor_batch(batch)
+    batch_size = batch.batch["responses"].shape[0]
+
+    traj_uid = non_tensor_batch.get("traj_uid")
+    if traj_uid is None:
+        fallback = np.arange(batch_size)
+        return fallback, fallback
+
+    traj_uid = np.asarray(traj_uid)
+    return np.unique(traj_uid, return_index=True)
+
+
+def _select_non_tensor_values(batch: DataProto, key: str, idx: np.ndarray | None = None) -> np.ndarray | None:
+    non_tensor_batch = _get_non_tensor_batch(batch)
+    if key not in non_tensor_batch:
+        return None
+
+    values = np.asarray(non_tensor_batch[key])
+    if idx is not None:
+        values = values[idx]
+    return values
+
+
+def _resolve_success_mask(batch: DataProto, unique_traj_uid: np.ndarray, unique_idx: np.ndarray) -> np.ndarray | None:
+    success = _select_non_tensor_values(batch, "success", unique_idx)
+    if success is not None:
+        return np.asarray(success, dtype=bool)
+
+    meta_info = getattr(batch, "meta_info", None)
+    if not isinstance(meta_info, dict):
+        return None
+
+    pipeline_data = meta_info.get("pipeline_data")
+    if pipeline_data is None or not hasattr(pipeline_data, "trajectories"):
+        return None
+
+    try:
+        return np.asarray(
+            [bool(pipeline_data.trajectories[str(traj_uid)].success) for traj_uid in unique_traj_uid],
+            dtype=bool,
+        )
+    except KeyError:
+        return None
+
+
 def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str, Any]:
     """
     Computes various metrics from a batch of data for PPO training.
@@ -118,7 +169,8 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
 
     valid_adv = torch.masked_select(advantages, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
-    unique_traj_uid, unique_idx = np.unique(batch.non_tensor_batch['traj_uid'], return_index=True)
+    non_tensor_batch = _get_non_tensor_batch(batch)
+    unique_traj_uid, unique_idx = _get_unique_traj_info(batch)
 
     if use_critic:
         values = batch.batch["values"]
@@ -165,41 +217,44 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
         "prompt_length/max": torch.max(prompt_length).detach().item(),
         "prompt_length/min": torch.min(prompt_length).detach().item(),
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
-        # episode
-        "episode/reward/mean": 
-            batch.non_tensor_batch["episode_rewards"][unique_idx].mean().item(),
-        "episode/reward/max": 
-            batch.non_tensor_batch["episode_rewards"][unique_idx].max().item(),
-        "episode/reward/min": 
-            batch.non_tensor_batch["episode_rewards"][unique_idx].min().item(),
-        "episode/length/mean": 
-            batch.non_tensor_batch["episode_lengths"][unique_idx].mean().item(),
-        "episode/length/max":
-            batch.non_tensor_batch["episode_lengths"][unique_idx].max().item(),
-        "episode/length/min": 
-            batch.non_tensor_batch["episode_lengths"][unique_idx].min().item(),
-        "episode/tool_call_count/mean": 
-            batch.non_tensor_batch["tool_callings"][unique_idx].mean().item(),
-        # "episode/tool_call_count/max":
-        #     batch.non_tensor_batch["tool_callings"][unique_idx].max().item(),
-        # "episode/tool_call_count/min":
-        #     batch.non_tensor_batch["tool_callings"][unique_idx].min().item(),
-        **({f"episode/{k}": v[0].item() for k, v in batch.non_tensor_batch.items() if "success_rate" in k}),
     }
-    
-    # === 成功/失败轨迹步数统计 ===
-    success_mask = batch.non_tensor_batch['success'][unique_idx]
-    episode_lengths = batch.non_tensor_batch['episode_lengths'][unique_idx]
-    
-    success_steps = episode_lengths[success_mask]
-    failure_steps = episode_lengths[~success_mask]
-    
-    if len(success_steps) > 0:
-        metrics["traj/success/steps"] = success_steps.mean().item()
-    if len(failure_steps) > 0:
-        metrics["traj/failure/steps"] = failure_steps.mean().item()
-    metrics["traj/success_rate"] = success_mask.float().mean().item()
-    
+
+    episode_rewards = _select_non_tensor_values(batch, "episode_rewards", unique_idx)
+    if episode_rewards is not None and episode_rewards.size > 0:
+        episode_rewards = np.asarray(episode_rewards, dtype=np.float32)
+        metrics["episode/reward/mean"] = episode_rewards.mean().item()
+        metrics["episode/reward/max"] = episode_rewards.max().item()
+        metrics["episode/reward/min"] = episode_rewards.min().item()
+
+    episode_lengths = _select_non_tensor_values(batch, "episode_lengths", unique_idx)
+    if episode_lengths is not None and episode_lengths.size > 0:
+        episode_lengths = np.asarray(episode_lengths, dtype=np.float32)
+        metrics["episode/length/mean"] = episode_lengths.mean().item()
+        metrics["episode/length/max"] = episode_lengths.max().item()
+        metrics["episode/length/min"] = episode_lengths.min().item()
+
+    tool_callings = _select_non_tensor_values(batch, "tool_callings", unique_idx)
+    if tool_callings is not None and tool_callings.size > 0:
+        tool_callings = np.asarray(tool_callings, dtype=np.float32)
+        metrics["episode/tool_call_count/mean"] = tool_callings.mean().item()
+
+    for key, value in non_tensor_batch.items():
+        if "success_rate" in key and len(value) > 0:
+            metrics[f"episode/{key}"] = np.asarray(value).reshape(-1)[0].item()
+
+    success_mask = _resolve_success_mask(batch, unique_traj_uid, unique_idx)
+    if success_mask is not None and success_mask.size > 0:
+        metrics["traj/success_rate"] = np.asarray(success_mask, dtype=np.float32).mean().item()
+
+        if episode_lengths is not None and episode_lengths.size > 0:
+            success_steps = episode_lengths[success_mask]
+            failure_steps = episode_lengths[~success_mask]
+
+            if success_steps.size > 0:
+                metrics["traj/success/steps"] = success_steps.mean().item()
+            if failure_steps.size > 0:
+                metrics["traj/failure/steps"] = failure_steps.mean().item()
+
     return metrics
 
 

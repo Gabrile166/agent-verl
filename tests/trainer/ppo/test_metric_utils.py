@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import torch
 
+from rlvmr.pipeline_data import PipelineData, QueryRecord, TrajectoryRecord
 from verl.trainer.ppo.metric_utils import (
     bootstrap_metric,
     calc_maj_val,
@@ -87,6 +88,14 @@ class TestComputeDataMetrics(unittest.TestCase):
             ]),
             "values": torch.tensor([[0.9, 1.0], [1.1, 1.2]]),
         }
+        self.batch.non_tensor_batch = {
+            "traj_uid": np.array(["traj-1", "traj-2"], dtype=object),
+            "episode_rewards": np.array([1.0, 0.0], dtype=np.float32),
+            "episode_lengths": np.array([2.0, 4.0], dtype=np.float32),
+            "tool_callings": np.array([1.0, 3.0], dtype=np.float32),
+            "success_rate": np.array([0.5, 0.5], dtype=np.float32),
+        }
+        self.batch.meta_info = {}
     
     def test_compute_data_metrics_with_critic(self):
         """Test compute_data_metrics with critic enabled."""
@@ -118,6 +127,39 @@ class TestComputeDataMetrics(unittest.TestCase):
         self.assertIn("critic/score/mean", metrics)
         self.assertIn("critic/rewards/mean", metrics)
         self.assertIn("response_length/mean", metrics)
+        self.assertNotIn("traj/success_rate", metrics)
+
+    def test_compute_data_metrics_falls_back_to_pipeline_success(self):
+        """Test trajectory success metrics can be read from pipeline_data."""
+        pipeline_data = PipelineData(
+            queries={
+                "query-1": QueryRecord(uid="query-1", task="task-1", expert_trajectory=[]),
+                "query-2": QueryRecord(uid="query-2", task="task-2", expert_trajectory=[]),
+            },
+            trajectories={
+                "traj-1": TrajectoryRecord(
+                    traj_uid="traj-1",
+                    uid="query-1",
+                    policy_trajectory={},
+                    episode_reward=1.0,
+                    success=True,
+                ),
+                "traj-2": TrajectoryRecord(
+                    traj_uid="traj-2",
+                    uid="query-2",
+                    policy_trajectory={},
+                    episode_reward=0.0,
+                    success=False,
+                ),
+            },
+        )
+        self.batch.meta_info = {"pipeline_data": pipeline_data}
+
+        metrics = compute_data_metrics(self.batch, use_critic=True)
+
+        self.assertAlmostEqual(metrics["traj/success_rate"], 0.5)
+        self.assertAlmostEqual(metrics["traj/success/steps"], 2.0)
+        self.assertAlmostEqual(metrics["traj/failure/steps"], 4.0)
 
 
 class TestComputeTimingMetrics(unittest.TestCase):

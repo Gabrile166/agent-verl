@@ -260,6 +260,12 @@ class TrajectoryCollector:
         success_rate = {}
         for key, value in success.items():
             success_rate[key] = np.mean(value)
+
+        raw_success = success.get("success")
+        if raw_success is None:
+            raw_success = success.get("success_rate")
+        if raw_success is not None and len(raw_success) != batch_size:
+            raw_success = None
         
         effective_batch = []
         for bs in range(batch_size):
@@ -273,6 +279,8 @@ class TrajectoryCollector:
                     data['episode_lengths'] = episode_lengths[bs]
                     # tool_callings
                     data['tool_callings'] = tool_callings[bs]
+                    if raw_success is not None:
+                        data['success'] = bool(raw_success[bs])
                     # success_rate
                     for key, value in success_rate.items():
                         data[key] = value

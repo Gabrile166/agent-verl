@@ -251,7 +251,7 @@ class SciWorldMultiProcessEnv(gym.Env):
         self.policy_indices = []
         self.expert_indices = []
         
-        # --- Shared JVM mode: launch 1 JVM per group instead of 1 per worker ---
+        # --- Shared JVM mode: share JVMs across groups to limit total JVM count ---
         self.shared_jvm = shared_jvm
         self.group_jvm_procs = []  # JVM Popen objects for cleanup
         self.group_ports = {}     # group_idx -> port
@@ -261,16 +261,32 @@ class SciWorldMultiProcessEnv(gym.Env):
         if shared_jvm:
             from py4j.java_gateway import launch_gateway
             from scienceworld.constants import BASEPATH, JAR_PATH
+            import math
             _jar = jar_path or JAR_PATH
-            for g in range(env_num):
+            # Cap JVM count: at most 1 JVM per workers_per_group groups
+            # e.g. 128 groups with group_n=1 → 128/1=128 workers → ceil(128/8)=16 JVMs
+            # e.g. 16 groups with group_n=8 → 16*9=144 workers → ceil(16/1)=16 JVMs
+            max_workers_per_jvm = max(self.workers_per_group, 8)
+            num_jvms = max(1, math.ceil(env_num / max(1, max_workers_per_jvm // self.workers_per_group)))
+            num_jvms = min(num_jvms, env_num)  # never more JVMs than groups
+            
+            jvm_ports = []
+            jvm_locks = []
+            for j in range(num_jvms):
                 port, proc = launch_gateway(
                     classpath=_jar, die_on_exit=True, cwd=BASEPATH,
                     javaopts=['-Xmx4G'], return_proc=True)
-                self.group_ports[g] = port
+                jvm_ports.append(port)
+                jvm_locks.append(ctx.Lock())
                 self.group_jvm_procs.append(proc)
-            # Per-group locks to serialize load/reset (Scala SimplifierProcessor$ is not thread-safe)
-            self.group_locks = {g: ctx.Lock() for g in range(env_num)}
-            print(f"[SciWorldEnvs] Shared JVM mode: launched {env_num} JVMs (ports: {list(self.group_ports.values())})")
+            
+            # Map each group to a JVM (round-robin)
+            self.group_locks = {}
+            for g in range(env_num):
+                jvm_idx = g % num_jvms
+                self.group_ports[g] = jvm_ports[jvm_idx]
+                self.group_locks[g] = jvm_locks[jvm_idx]
+            print(f"[SciWorldEnvs] Shared JVM mode: {env_num} groups sharing {num_jvms} JVMs")
         
         for i in range(self.num_processes):
             parent_remote, child_remote = ctx.Pipe()

@@ -51,10 +51,29 @@ class BasePolicy(object):
         self.steps = 0
         self.is_agent_holding_right_object = False
 
+    def get_reobserve_action(self):
+        return "examine {}".format(self.curr_recep) if self.curr_recep else "look"
+
+    def extract_observed_object_names(self, obs):
+        if "you see" not in obs.lower():
+            return []
+
+        obj_str = re.split("you see", obs, maxsplit=1, flags=re.IGNORECASE)[-1]
+        obj_str = re.split(r"your task is to:?", obj_str, maxsplit=1, flags=re.IGNORECASE)[0]
+        obj_str = re.sub(r"\band\b", ",", obj_str, flags=re.IGNORECASE)
+
+        object_names = []
+        for raw_obj in obj_str.split(","):
+            cleaned_obj = raw_obj.strip().strip(".").strip()
+            cleaned_obj = re.sub(r"^(?:a|an)\s+", "", cleaned_obj, flags=re.IGNORECASE)
+            cleaned_obj = cleaned_obj.lower()
+            if cleaned_obj and cleaned_obj != "nothing":
+                object_names.append(cleaned_obj)
+        return object_names
+
     def get_objects_and_classes(self, obs):
-        obj_str = re.split("you see", obs, flags=re.IGNORECASE)[-1].replace(" and a ", "").replace(" a ", "").split("Your task is to", 1)[0].strip(".,\n\r")
-        objects_with_ids = obj_str.split(",")
-        return dict((o, self.object_id_to_cls(o)) for o in objects_with_ids)
+        object_names = self.extract_observed_object_names(obs)
+        return dict((obj_name, self.object_id_to_cls(obj_name)) for obj_name in object_names)
 
     def object_id_to_cls(self, object_hash, special_char=' '):
         return object_hash.split(special_char)[0]
@@ -64,6 +83,27 @@ class BasePolicy(object):
 
     def get_list_of_objects_of_class(self, obj_cls, obj_dict):
         return [name for name, cls in obj_dict.items() if cls == obj_cls]
+
+    def get_matching_objects_from_admissible_commands(self, game_state, action, obj_cls):
+        extract_object_name = {
+            'take': lambda command: command[len("take "):command.rfind(" from ")] if command.startswith("take ") and " from " in command else "",
+            'slice': lambda command: command[len("slice "):command.rfind(" with ")] if command.startswith("slice ") and " with " in command else "",
+            'use': lambda command: command[len("use "):] if command.startswith("use ") else "",
+        }.get(action)
+
+        if extract_object_name is None:
+            return []
+
+        matching_objects = []
+        seen_objects = set()
+        for command in game_state.get('admissible_commands', []):
+            command = str(command).lower()
+            obj_name = extract_object_name(command).strip()
+            if obj_name and self.object_id_to_cls(obj_name) == obj_cls and obj_name not in seen_objects:
+                matching_objects.append(obj_name)
+                seen_objects.add(obj_name)
+
+        return matching_objects
 
     def get_next_subgoal(self):
         subgoal = self.subgoals[self.subgoal_idx]
@@ -265,9 +305,12 @@ class BasePolicy(object):
             if "closed" in obs and not self.checked_inside_curr_recep and len(self.visible_objects) == 0:
                 return "open {}".format(self.curr_recep)
             elif len(self.visible_objects) == 0 or not any(sub_param in o for o in self.visible_objects):
-                return "examine {}".format(self.curr_recep)
+                return self.get_reobserve_action()
             else:
-                obj = random.choice(objs_of_interest)
+                candidate_objects = objs_of_interest or self.get_matching_objects_from_admissible_commands(game_state, sub_action, sub_param)
+                if len(candidate_objects) == 0:
+                    return self.get_reobserve_action()
+                obj = random.choice(candidate_objects)
                 return "take {} from {}".format(obj, self.curr_recep)
 
         # PUT
@@ -304,18 +347,24 @@ class BasePolicy(object):
         # SLICE
         if sub_action == 'slice':
             if len(self.visible_objects) == 0:
-                return "examine {}".format(self.curr_recep)
+                return self.get_reobserve_action()
             else:
-                obj = random.choice(objs_of_interest)
+                candidate_objects = objs_of_interest or self.get_matching_objects_from_admissible_commands(game_state, sub_action, sub_param)
+                if len(candidate_objects) == 0:
+                    return self.get_reobserve_action()
+                obj = random.choice(candidate_objects)
                 knife_obj = self.inventory[0]
                 return "slice {} with {}".format(obj, knife_obj)
 
         # USE
         if sub_action == 'use':
             if len(self.visible_objects) == 0:
-                return "examine {}".format(self.curr_recep)
+                return self.get_reobserve_action()
             else:
-                obj = random.choice(objs_of_interest)
+                candidate_objects = objs_of_interest or self.get_matching_objects_from_admissible_commands(game_state, sub_action, sub_param)
+                if len(candidate_objects) == 0:
+                    return self.get_reobserve_action()
+                obj = random.choice(candidate_objects)
                 return "use {}".format(obj)
 
         # if holding something irrelavant, then discard it from where it was pickedup

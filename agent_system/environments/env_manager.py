@@ -1155,6 +1155,7 @@ def make_envs(config):
         raise ValueError("config.env.rollout.n should be an integer")
     group_n = config.env.rollout.n if config.env.rollout.n > 0 else 1
     resources_per_worker = OmegaConf.to_container(config.env.resources_per_worker, resolve=True)
+    success_reward = float(config.env.get("success_reward", 10.0))
 
 
     # 检查是否启用 Expert Worker
@@ -1217,8 +1218,8 @@ def make_envs(config):
         env_kwargs = {
             'eval_dataset': config.env.alfworld.eval_dataset, # 'eval_in_distribution' or 'eval_out_of_distribution'
         }
-        _envs = build_alfworld_envs(alf_config_path, config.env.seed, config.data.train_batch_size, group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker, expert_in_group=use_expert_worker)
-        _val_envs = build_alfworld_envs(alf_config_path, config.env.seed + 1000, config.data.val_batch_size, 1, is_train=False, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker)
+        _envs = build_alfworld_envs(alf_config_path, config.env.seed, config.data.train_batch_size, group_n, is_train=True, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker, expert_in_group=use_expert_worker, success_reward=success_reward)
+        _val_envs = build_alfworld_envs(alf_config_path, config.env.seed + 1000, config.data.val_batch_size, 1, is_train=False, env_kwargs=env_kwargs, resources_per_worker=resources_per_worker, success_reward=success_reward)
         
         projection_f = partial(alfworld_projection)
         envs = AlfWorldEnvironmentManager(_envs, projection_f, config)
@@ -1297,7 +1298,8 @@ def make_envs(config):
             env_step_limit=env_step_limit,
             jar_path=jar_path,
             variations_idx=variations_idx['train'],
-            expert_in_group=use_expert_worker
+            expert_in_group=use_expert_worker,
+            success_reward=success_reward
         )
 
         _val_envs = build_sciworld_envs(
@@ -1307,7 +1309,8 @@ def make_envs(config):
             simplifications_preset=simplifications_preset,
             env_step_limit=env_step_limit,
             jar_path=jar_path,
-            variations_idx=variations_idx['test']
+            variations_idx=variations_idx['test'],
+            success_reward=success_reward
         )
 
         # Create projection function

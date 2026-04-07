@@ -10,12 +10,17 @@ import time
 import random
 from typing import Union
 from itertools import product
+from agent_system.environments.reward_utils import (
+    DEFAULT_SUCCESS_REWARD,
+    compute_binary_success_reward,
+)
 
-def compute_reward(info, multi_modal=False):
-    reward = 10.0 * float(info['won'])
-    return reward
+def compute_reward(info, multi_modal=False, success_reward: float = DEFAULT_SUCCESS_REWARD):
+    return compute_binary_success_reward(info['won'], success_reward)
 
-def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar_path, split=None, variations_idx=None, is_expert=False, shared_port=None, jvm_lock=None):
+def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar_path,
+            split=None, variations_idx=None, is_expert=False, shared_port=None,
+            jvm_lock=None, success_reward: float = DEFAULT_SUCCESS_REWARD):
     """
     SciWorld worker process.
     
@@ -117,7 +122,7 @@ def _worker(remote, seed, task_nums, simplifications_preset, env_step_limit, jar
                 isCompleted = done
                 prev_score = info['score']
                 info["won"] = isCompleted and info["score"] > 0
-                reward = compute_reward(info)
+                reward = compute_reward(info, success_reward=success_reward)
                 
                 info['is_expert'] = is_expert
                 if is_expert:
@@ -222,7 +227,8 @@ class SciWorldMultiProcessEnv(gym.Env):
         jar_path: str = None,
         variations_idx: list = None,
         expert_in_group: bool = False,
-        shared_jvm: bool = True
+        shared_jvm: bool = True,
+        success_reward: float = DEFAULT_SUCCESS_REWARD
     ) -> None:
         super().__init__()
         self.group_n = group_n
@@ -243,6 +249,7 @@ class SciWorldMultiProcessEnv(gym.Env):
         self.simplifications_preset = simplifications_preset
         self.env_step_limit = env_step_limit
         self.jar_path = jar_path
+        self.success_reward = float(success_reward)
         random.seed(seed)
         self._rng = np.random.RandomState(seed)
         self._parent_remotes: list[mp.connection.Connection] = []
@@ -314,7 +321,7 @@ class SciWorldMultiProcessEnv(gym.Env):
                 target=_worker,
                 args=(child_remote, seed_i, self.task_nums, self.simplifications_preset, 
                       self.env_step_limit, self.jar_path, self.split, self.variations_idx,
-                      is_expert, shared_port, jvm_lock),
+                      is_expert, shared_port, jvm_lock, self.success_reward),
                 daemon=True,
             )
             worker.start()
@@ -474,7 +481,8 @@ def build_sciworld_envs(
     jar_path: str = None,
     variations_idx: list = None,
     expert_in_group: bool = False,
-    shared_jvm: bool = True
+    shared_jvm: bool = True,
+    success_reward: float = DEFAULT_SUCCESS_REWARD
 ):
     return SciWorldMultiProcessEnv(
         seed=seed,
@@ -487,5 +495,6 @@ def build_sciworld_envs(
         jar_path=jar_path,
         variations_idx=variations_idx,
         expert_in_group=expert_in_group,
-        shared_jvm=shared_jvm
+        shared_jvm=shared_jvm,
+        success_reward=success_reward
     ) 

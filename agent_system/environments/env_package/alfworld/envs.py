@@ -23,6 +23,10 @@ import torchvision.transforms as T
 import ray
 
 from agent_system.environments.env_package.alfworld.alfworld.agents.environment import get_environment
+from agent_system.environments.reward_utils import (
+    DEFAULT_SUCCESS_REWARD,
+    compute_binary_success_reward,
+)
 
 ALF_ACTION_LIST=["pass", "goto", "pick", "put", "open", "close", "toggle", "heat", "clean", "cool", "slice", "inventory", "examine", "look"]
 
@@ -44,11 +48,10 @@ def get_obs_image(env):
     image_tensors = torch.stack(image_tensors, dim=0)
     return image_tensors
 
-def compute_reward(info, multi_modal=False):
+def compute_reward(info, multi_modal=False, success_reward: float = DEFAULT_SUCCESS_REWARD):
+    reward = compute_binary_success_reward(info['won'], success_reward)
     if multi_modal:
-        reward = 10.0 * float(info['won']) + float(info['goal_condition_success_rate'])
-    else:
-        reward = 10.0 * float(info['won'])
+        reward += float(info['goal_condition_success_rate'])
     return reward
 
 class AlfworldWorker:
@@ -142,7 +145,8 @@ class AlfworldWorker:
 
 class AlfworldEnvs(gym.Env):
     def __init__(self, alf_config_path, seed, env_num, group_n, resources_per_worker, 
-                 is_train=True, env_kwargs={}, expert_in_group=False):
+                 is_train=True, env_kwargs={}, expert_in_group=False,
+                 success_reward: float = DEFAULT_SUCCESS_REWARD):
         """
         Initialize Alfworld environments with optional Expert Worker support.
         """
@@ -156,6 +160,7 @@ class AlfworldEnvs(gym.Env):
         env_type = config['env']['type']
         base_env = get_environment(env_type)(config, train_eval='train' if is_train else eval_dataset)
         self.multi_modal = (env_type == 'AlfredThorEnv')
+        self.success_reward = float(success_reward)
         
         # N+1 Expert Worker 架构
         self.policy_per_group = group_n
@@ -259,7 +264,7 @@ class AlfworldEnvs(gym.Env):
             all_dones.append(dones[0])
             all_infos.append(info)
             self.prev_admissible_commands[i] = info['admissible_commands']
-            all_rewards.append(compute_reward(info, self.multi_modal))
+            all_rewards.append(compute_reward(info, self.multi_modal, self.success_reward))
 
         # 过滤并返回 Policy 结果
         if self.expert_in_group:
@@ -379,6 +384,7 @@ class AlfworldEnvs(gym.Env):
             ray.kill(worker)
 
 def build_alfworld_envs(alf_config_path, seed, env_num, group_n, resources_per_worker, 
-                        is_train=True, env_kwargs={}, expert_in_group=False):
+                        is_train=True, env_kwargs={}, expert_in_group=False,
+                        success_reward: float = DEFAULT_SUCCESS_REWARD):
     return AlfworldEnvs(alf_config_path, seed, env_num, group_n, resources_per_worker, 
-                        is_train, env_kwargs, expert_in_group)
+                        is_train, env_kwargs, expert_in_group, success_reward)

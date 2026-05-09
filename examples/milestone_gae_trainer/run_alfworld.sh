@@ -41,16 +41,27 @@ export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangji
 # conda activate rlvmr-alfworld
 # export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/rlvmr-alfworld/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
 
-num_cpus_per_env_worker=0.15 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
+# Thread limits to prevent thread explosion
+# Critical for preventing "Resource temporarily unavailable" errors
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
+num_cpus_per_env_worker=0.1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 
 # ===================== Configuration =====================
-MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-3B-Instruct
+MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-7B-Instruct
 BASE_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin
-EXP_NAME=alfworld_milestone_gae_qwen2.5_3b_ood
+EXP_NAME=alfworld_milestone_gae_qwen2.5_7b_ood
 
 train_data_size=16
-val_data_size=128
+val_data_size=64
 group_size=8
+
+# WARNING: Ray will create (train_data_size * group_size + val_data_size) Python worker processes
+# Current: 16*8 + 64 = 192 Python workers (each is a Ray actor)
+# To reduce workers: decrease train_data_size, val_data_size, or group_size
 
 # Milestone GAE Configuration
 MILESTONE_GAMMA=0.99
@@ -86,7 +97,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.milestone_gae.cost=$MILESTONE_COST \
     'algorithm.milestone_gae.judge_llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
     algorithm.milestone_gae.judge_llm.model=$JUDGE_LLM_MODEL \
-    algorithm.milestone_gae.judge_llm.temperature=0.1 \
+    algorithm.milestone_gae.judge_llm.temperature=0.6 \
     algorithm.milestone_gae.generator.enable=$GENERATOR_ENABLE \
     algorithm.milestone_gae.generator.num_milestones=$GENERATOR_NUM_MILESTONES \
     'algorithm.milestone_gae.generator.llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
@@ -99,8 +110,8 @@ python3 -m verl.trainer.main_ppo \
     data.val_files=$BASE_PATH/data/verl-agent/text/test.parquet \
     data.train_batch_size=$train_data_size \
     data.val_batch_size=$val_data_size \
-    data.max_prompt_length=2048 \
-    data.max_response_length=1024 \
+    data.max_prompt_length=4096 \
+    data.max_response_length=2048 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
@@ -132,12 +143,12 @@ python3 -m verl.trainer.main_ppo \
     algorithm.gamma=0.95 \
     env.env_name=alfworld/AlfredTWEnv \
     env.alfworld.eval_dataset='eval_out_of_distribution' \
-    env.seed=0 \
+    env.seed=42 \
     env.max_steps=30 \
     env.history_length=10 \
     env.rollout.n=$group_size \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
-    ray_init.num_cpus=96 \
+    ray_init.num_cpus=48 \
     trainer.ray_wait_register_center_timeout=600 \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \

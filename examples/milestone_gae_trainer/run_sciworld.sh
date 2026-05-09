@@ -33,16 +33,20 @@ export ALFWORLD_DATA=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-ml
 export RAY_DEDUP_LOGS=0
 
 source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
-conda activate asignment
-export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/asignment/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
+conda activate verl-agent
+export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/verl-agent/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
+
 export PYTHONUTF8=1
+
+export WANDB_MODE=offline
 
 num_cpus_per_env_worker=0.15 # The CPU resource allocated for each environment worker.
 
 # ===================== Configuration =====================
-MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-3B-Instruct
+MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-7B-Instruct
 BASE_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin
-EXP_NAME=sciworld_milestone_gae_qwen2.5_3b
+# EXP_NAME=mt_sciworld_grpo_qwen2.5_7b_seed64
+EXP_NAME=mt_sciworld_milestone_qwen2.5_7b_seed64_30
 
 train_data_size=16
 val_data_size=128
@@ -73,12 +77,12 @@ python3 -m verl.trainer.main_ppo \
     algorithm.milestone_gae.cost=$MILESTONE_COST \
     'algorithm.milestone_gae.judge_llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
     algorithm.milestone_gae.judge_llm.model=$JUDGE_LLM_MODEL \
-    algorithm.milestone_gae.judge_llm.temperature=0.1 \
+    algorithm.milestone_gae.judge_llm.temperature=0.6 \
     algorithm.milestone_gae.generator.enable=$GENERATOR_ENABLE \
     algorithm.milestone_gae.generator.num_milestones=$GENERATOR_NUM_MILESTONES \
     'algorithm.milestone_gae.generator.llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
     algorithm.milestone_gae.generator.llm.model=$JUDGE_LLM_MODEL \
-    algorithm.milestone_gae.generator.llm.temperature=0.3 \
+    algorithm.milestone_gae.generator.llm.temperature=0.6 \
     algorithm.milestone_gae.fallback_template=$MILESTONE_TEMPLATE \
     algorithm.expert.enable=true \
     algorithm.trajectory_save.enable=true \
@@ -106,7 +110,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=$ENGINE \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.45 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False \
@@ -121,9 +125,9 @@ python3 -m verl.trainer.main_ppo \
     env.env_name=sciworld/ScienceWorldEnv \
     env.sciworld.generalization_level=1 \
     env.sciworld.env_step_limit=100 \
-    env.seed=0 \
-    env.max_steps=100 \
-    env.history_length=10 \
+    env.seed=64 \
+    env.max_steps=30 \
+    env.history_length=2 \
     env.rollout.n=$group_size \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     ray_init.num_cpus=96 \

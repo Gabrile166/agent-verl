@@ -321,7 +321,16 @@ class TrajectoryCollector:
 
         lenght_obs = len(obs['text']) if obs['text'] is not None else len(obs['image'])
         assert len(gen_batch.batch) == lenght_obs, f"gen_batch size {len(gen_batch.batch)} does not match obs size {lenght_obs}"
-        
+
+        def _safe_task_score(info, default=0.0) -> float:
+            score = info.get('task_score', info.get('score', default)) if isinstance(info, dict) else default
+            try:
+                return float(score)
+            except (TypeError, ValueError):
+                return float(default)
+
+        prev_task_scores = np.array([_safe_task_score(info) for info in infos], dtype=np.float32)
+
         if self.config.env.rollout.n > 0: # env grouping
             uid_batch = []
             for i in range(batch_size):
@@ -398,8 +407,22 @@ class TrajectoryCollector:
             episode_lengths[active_masks] += 1
 
             assert len(rewards) == batch_size, f"env should return rewards for all environments, got {len(rewards)} rewards for {batch_size} environments"
+            current_task_scores = np.array(
+                [_safe_task_score(info, default=prev_task_scores[i]) for i, info in enumerate(infos)],
+                dtype=np.float32,
+            )
+            task_score_before = prev_task_scores.copy()
+            task_score_after = current_task_scores.copy()
+            task_score_delta = task_score_after - task_score_before
+            task_score_after[~active_masks] = task_score_before[~active_masks]
+            task_score_delta[~active_masks] = 0.0
+
             batch.non_tensor_batch['rewards'] = torch_to_numpy(rewards, is_object=True)
             batch.non_tensor_batch['active_masks'] = torch_to_numpy(active_masks, is_object=True)
+            batch.non_tensor_batch['task_score_before'] = task_score_before
+            batch.non_tensor_batch['task_score_after'] = task_score_after
+            batch.non_tensor_batch['task_score_delta'] = task_score_delta
+            prev_task_scores[active_masks] = current_task_scores[active_masks]
             
             # Update episode lengths for active environments
             batch_list: list[dict] = to_list_of_dict(batch)

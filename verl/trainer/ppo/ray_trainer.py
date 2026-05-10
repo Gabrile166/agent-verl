@@ -1534,6 +1534,8 @@ class RayPPOTrainer:
                         #   2. Judge trajectories — iterate trajectories with FK lookup to query
                         milestone_gae_config = {}
                         if self.config.algorithm.adv_estimator == AdvantageEstimator.MilestoneGAE:
+                            judge_input_cfg = self.config.algorithm.milestone_gae.get('judge_input', {})
+                            include_task_score_in_judge = bool(judge_input_cfg.get('include_task_score', False))
                             milestone_gae_config = {
                                 'gamma': self.config.algorithm.milestone_gae.gamma,
                                 'lambda': self.config.algorithm.milestone_gae.get('lam', 0.95),
@@ -1574,6 +1576,12 @@ class RayPPOTrainer:
                                     batch_trajectories = []
                                     batch_milestones = []
                                     
+                                    def _score_value(value):
+                                        try:
+                                            return float(value)
+                                        except (TypeError, ValueError):
+                                            return None
+
                                     for traj_uid in traj_uid_order:
                                         traj = pipeline_data.trajectories[traj_uid]  # strict access
                                         query = pipeline_data.queries[traj.uid]       # strict FK lookup
@@ -1585,11 +1593,21 @@ class RayPPOTrainer:
                                         else:
                                             policy_steps = policy_traj if isinstance(policy_traj, list) else []
                                         
-                                        # Format for judge API
-                                        formatted_traj = [
-                                            {"action": s.get("action", ""), "observation": s.get("obs", s.get("observation", ""))}
-                                            for s in policy_steps
-                                        ]
+                                        # Format for judge API. Score fields are included only for the
+                                        # controlled include_task_score ablation.
+                                        formatted_traj = []
+                                        for s in policy_steps:
+                                            step_payload = {
+                                                "action": s.get("action", ""),
+                                                "observation": s.get("obs", s.get("observation", "")),
+                                            }
+                                            if include_task_score_in_judge:
+                                                for score_key in ("task_score_before", "task_score_after", "task_score_delta"):
+                                                    if score_key in s:
+                                                        score_val = _score_value(s.get(score_key))
+                                                        if score_val is not None:
+                                                            step_payload[score_key] = score_val
+                                            formatted_traj.append(step_payload)
                                         
                                         batch_task_descs.append(query.task)
                                         batch_trajectories.append(formatted_traj)
@@ -1606,7 +1624,8 @@ class RayPPOTrainer:
                                             result = self.milestone_judge.judge_trajectory_with_milestones(
                                                 task_description=batch_task_descs[idx],
                                                 trajectory=batch_trajectories[idx],
-                                                milestones=milestones
+                                                milestones=milestones,
+                                                include_task_score=include_task_score_in_judge,
                                             )
                                             return idx, result.step_phis
                                         except Exception as e:

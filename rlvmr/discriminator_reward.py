@@ -427,10 +427,15 @@ def format_policy_trajectory(
         elif not isinstance(obs, str):
             obs = str(obs) if obs else ""
         
-        formatted_steps.append({
+        formatted_step = {
             'obs': obs,
             'action': action
-        })
+        }
+        for score_key in ('task_score_before', 'task_score_after', 'task_score_delta'):
+            if score_key in step:
+                formatted_step[score_key] = step[score_key]
+
+        formatted_steps.append(formatted_step)
     
     return {
         'task': task,

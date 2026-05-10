@@ -294,6 +294,8 @@ algorithm:
     lam: 0.95                        # Lambda for GAE
     cost: 0.05                       # Per-step cost penalty
     fallback_template: "alfworld"    # Fallback milestone template name
+    judge_input:
+      include_task_score: False      # Whether to include env task_score before/after/delta in Judge input
     # Judge LLM Configuration
     judge_llm:
       base_urls: ["http://127.0.0.1:8080/v1"]  # LLM API endpoints (list for load balancing)

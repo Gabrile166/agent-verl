@@ -96,8 +96,9 @@ class MilestoneJudge:
     def _build_prompt(
         self,
         task_description: str,
-        trajectory: List[Dict[str, str]],
+        trajectory: List[Dict[str, Any]],
         milestones: Optional[List[Dict[str, Any]]] = None,
+        include_task_score: bool = False,
     ) -> str:
         """构建 Judge 的 Prompt
         
@@ -105,6 +106,7 @@ class MilestoneJudge:
             task_description: 任务描述
             trajectory: 轨迹
             milestones: 里程碑列表（可选，默认使用 self.milestones）
+            include_task_score: 是否展示 SciWorld 环境累计分变化
         """
         # 使用传入的里程碑或默认的实例里程碑
         ms = milestones if milestones is not None else self.milestones
@@ -116,11 +118,41 @@ class MilestoneJudge:
         ])
         
         # 轨迹步骤
+        def _format_score(value: Any) -> str:
+            try:
+                return f"{float(value):.4f}"
+            except (TypeError, ValueError):
+                return "N/A"
+
         steps_str = ""
         for i, step in enumerate(trajectory, 1):
             action = step.get("action", "N/A")
             observation = step.get("observation", "N/A")
             steps_str += f"\nStep {i}:\n  Environment State: {observation}\n  Agent Action: {action}\n"
+            if include_task_score:
+                score_before = _format_score(step.get("task_score_before"))
+                score_after = _format_score(step.get("task_score_after"))
+                score_delta = _format_score(step.get("task_score_delta"))
+                steps_str += (
+                    f"  Task Score Before: {score_before}\n"
+                    f"  Task Score After: {score_after}\n"
+                    f"  Task Score Delta: {score_delta}\n"
+                )
+
+        task_score_context = ""
+        task_score_notes = ""
+        if include_task_score:
+            task_score_context = """
+When present, Task Score fields are SciWorld's cumulative environment progress scores:
+- Task Score Before: score before the action at this step
+- Task Score After: score after the action at this step
+- Task Score Delta: after minus before
+"""
+            task_score_notes = """
+5. Use Task Score Delta as strong evidence of objective progress when it is positive
+6. Task Score Delta = 0 does not necessarily mean the step is useless; navigation, preparation, reading, or inspection may be necessary
+7. If Task Score Delta = 0 and the observation shows no clear task-relevant state change, keep the previous milestone
+8. If Task Score Delta < 0, treat the step as regression or a likely mistake unless the observation clearly proves otherwise"""
         
         prompt = f"""You are a task progress evaluator.
 
@@ -134,6 +166,7 @@ M0 (Φ=0.0): Not started — Criteria: No milestone has been achieved
 ## Agent Execution Trajectory
 
 Note: Each step shows the environment state (what the agent observes before acting) followed by the agent's action.
+{task_score_context}
 {steps_str}
 
 ## Instructions
@@ -155,7 +188,7 @@ Notes:
 1. M0 means no milestone has been achieved yet, phi=0.0
 2. Milestones are generally monotonically increasing (may occasionally regress due to wrong actions)
 3. The highest milestone (phi=1.0) should only be reached when the task is confirmed successful
-4. You must output valid JSON"""
+4. You must output valid JSON{task_score_notes}"""
 
         return prompt
     
@@ -278,8 +311,9 @@ Notes:
     def judge_trajectory_with_milestones(
         self,
         task_description: str,
-        trajectory: List[Dict[str, str]],
+        trajectory: List[Dict[str, Any]],
         milestones: List[Dict[str, Any]],
+        include_task_score: bool = False,
     ) -> JudgmentResult:
         """
         线程安全版本：对单条轨迹进行里程碑判定（使用传入的里程碑）
@@ -288,11 +322,17 @@ Notes:
             task_description: 任务描述
             trajectory: 轨迹步骤列表
             milestones: 里程碑列表
+            include_task_score: 是否在 prompt 中展示 SciWorld 环境累计分变化
         
         Returns:
             JudgmentResult 包含每步的势能值
         """
-        prompt = self._build_prompt(task_description, trajectory, milestones)
+        prompt = self._build_prompt(
+            task_description,
+            trajectory,
+            milestones,
+            include_task_score=include_task_score,
+        )
         
         # 构建局部 phi 映射
         local_phi_map = {"M0": 0.0}

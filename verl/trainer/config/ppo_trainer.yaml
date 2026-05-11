@@ -296,6 +296,8 @@ algorithm:
     fallback_template: "alfworld"    # Fallback milestone template name
     judge_input:
       include_task_score: False      # Whether to include env task_score before/after/delta in Judge input
+      chunk_size: 0                  # 0 disables chunked Judge; >0 judges at most this many steps per chunk
+      chunk_overlap: 1               # Context-only previous steps to include for each chunk
     # Judge LLM Configuration
     judge_llm:
       base_urls: ["http://127.0.0.1:8080/v1"]  # LLM API endpoints (list for load balancing)

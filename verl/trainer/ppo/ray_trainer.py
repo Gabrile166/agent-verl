@@ -492,6 +492,9 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+        judge_details = milestone_cfg.get("judge_details", None)
+        if judge_details:
+            adv_details.update(judge_details)
         data.meta_info['milestone_gae_details'] = adv_details
     else:
         raise NotImplementedError
@@ -1535,11 +1538,31 @@ class RayPPOTrainer:
                         milestone_gae_config = {}
                         if self.config.algorithm.adv_estimator == AdvantageEstimator.MilestoneGAE:
                             judge_input_cfg = self.config.algorithm.milestone_gae.get('judge_input', {})
+
+                            def _int_cfg(value, default):
+                                try:
+                                    return int(value)
+                                except (TypeError, ValueError):
+                                    return default
+
                             include_task_score_in_judge = bool(judge_input_cfg.get('include_task_score', False))
+                            judge_chunk_size = _int_cfg(judge_input_cfg.get('chunk_size', 0), 0)
+                            judge_chunk_overlap = _int_cfg(judge_input_cfg.get('chunk_overlap', 1), 1)
+                            judge_chunk_overlap = max(0, judge_chunk_overlap)
+                            if judge_chunk_size > 0:
+                                judge_chunk_overlap = min(judge_chunk_overlap, max(judge_chunk_size - 1, 0))
                             milestone_gae_config = {
                                 'gamma': self.config.algorithm.milestone_gae.gamma,
                                 'lambda': self.config.algorithm.milestone_gae.get('lam', 0.95),
                                 'cost': self.config.algorithm.milestone_gae.cost,
+                                'judge_details': {
+                                    'judge_chunk_enabled': float(judge_chunk_size > 0),
+                                    'judge_chunk_size': float(max(judge_chunk_size, 0)),
+                                    'judge_chunk_overlap': float(judge_chunk_overlap),
+                                    'judge_avg_chunks_per_traj': 0.0,
+                                    'judge_max_chunks_per_traj': 0.0,
+                                    'judge_chunk_failure_ratio': 0.0,
+                                },
                             }
                             
                             pipeline_data = _ensure_pipeline_data(batch)
@@ -1615,8 +1638,21 @@ class RayPPOTrainer:
                                     
                                     # Parallel judging (ThreadPoolExecutor)
                                     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                                    def _fit_step_phis(step_phis, expected_len):
+                                        step_phis = list(step_phis or [])
+                                        if len(step_phis) < expected_len:
+                                            fill_value = step_phis[-1] if step_phis else 0.0
+                                            step_phis.extend([fill_value] * (expected_len - len(step_phis)))
+                                        return step_phis[:expected_len]
+
+                                    def _estimate_chunk_count(traj_len):
+                                        if judge_chunk_size <= 0:
+                                            return 1.0 if traj_len else 0.0
+                                        return float((traj_len + judge_chunk_size - 1) // judge_chunk_size) if traj_len else 0.0
                                     
                                     def _judge_one(idx):
+                                        expected_len = len(batch_trajectories[idx])
                                         try:
                                             milestones = batch_milestones[idx]
                                             if not milestones:
@@ -1626,14 +1662,28 @@ class RayPPOTrainer:
                                                 trajectory=batch_trajectories[idx],
                                                 milestones=milestones,
                                                 include_task_score=include_task_score_in_judge,
+                                                chunk_size=judge_chunk_size,
+                                                chunk_overlap=judge_chunk_overlap,
                                             )
-                                            return idx, result.step_phis
+                                            step_phis = _fit_step_phis(result.step_phis, expected_len)
+                                            chunk_stats = result.chunk_stats or {}
+                                            return idx, step_phis, chunk_stats
                                         except Exception as e:
-                                            traj_len = len(batch_trajectories[idx]) if batch_trajectories[idx] else 1
-                                            return idx, [0.0] * traj_len
+                                            chunk_count = _estimate_chunk_count(expected_len)
+                                            chunk_stats = {
+                                                "chunk_enabled": float(judge_chunk_size > 0),
+                                                "chunk_size": float(max(judge_chunk_size, 0)),
+                                                "chunk_overlap": float(judge_chunk_overlap),
+                                                "chunk_count": chunk_count,
+                                                "chunk_failures": chunk_count,
+                                            }
+                                            return idx, [0.0] * expected_len, chunk_stats
                                     
-                                    max_workers = len(self.milestone_judge.clients) * 4
+                                    worker_multiplier = 8 if judge_chunk_size > 0 else 4
+                                    client_count = max(len(self.milestone_judge.clients), 1)
+                                    max_workers = max(1, min(client_count * worker_multiplier, len(traj_uid_order)))
                                     judge_results = [None] * len(traj_uid_order)
+                                    judge_chunk_stats = [None] * len(traj_uid_order)
                                     
                                     with ThreadPoolExecutor(max_workers=max_workers) as executor:
                                         futures = [executor.submit(_judge_one, i) for i in range(len(traj_uid_order))]
@@ -1642,19 +1692,40 @@ class RayPPOTrainer:
                                             pbar = tqdm(total=len(traj_uid_order), desc="[Judge] Trajectories", unit="traj")
                                         
                                         for future in as_completed(futures):
-                                            idx, step_phis = future.result()
-                                            judge_results[idx] = step_phis
-                                            if tqdm is not None:
-                                                pbar.update(1)
+                                            try:
+                                                idx, step_phis, chunk_stats = future.result()
+                                            except Exception:
+                                                idx = None
+                                            else:
+                                                judge_results[idx] = step_phis
+                                                judge_chunk_stats[idx] = chunk_stats
+                                            finally:
+                                                if tqdm is not None:
+                                                    pbar.update(1)
                                         
                                         if tqdm is not None:
                                             pbar.close()
+
+                                    valid_chunk_stats = [s for s in judge_chunk_stats if s is not None]
+                                    total_chunks = sum(float(s.get("chunk_count", 0.0)) for s in valid_chunk_stats)
+                                    total_chunk_failures = sum(float(s.get("chunk_failures", 0.0)) for s in valid_chunk_stats)
+                                    max_chunks = max([float(s.get("chunk_count", 0.0)) for s in valid_chunk_stats], default=0.0)
+                                    milestone_gae_config['judge_details'].update({
+                                        'judge_chunk_enabled': float(judge_chunk_size > 0),
+                                        'judge_chunk_size': float(max(judge_chunk_size, 0)),
+                                        'judge_chunk_overlap': float(judge_chunk_overlap),
+                                        'judge_avg_chunks_per_traj': total_chunks / max(len(traj_uid_order), 1),
+                                        'judge_max_chunks_per_traj': max_chunks,
+                                        'judge_chunk_failure_ratio': total_chunk_failures / max(total_chunks, 1.0),
+                                    })
                                     
                                     # Store results back into PipelineData
                                     # NOTE: phis are set per-traj (different keys) so thread-safe in judging.
                                     for i, traj_uid in enumerate(traj_uid_order):
+                                        expected_len = len(batch_trajectories[i])
+                                        step_phis = judge_results[i] if judge_results[i] is not None else [0.0] * expected_len
                                         pipeline_data.trajectories[traj_uid].phis = (
-                                            judge_results[i] if judge_results[i] is not None else [0.0]
+                                            _fit_step_phis(step_phis, expected_len)
                                         )
                                     
                                     print(f"[MilestoneGAE] Judged {len(traj_uid_order)} trajectories")

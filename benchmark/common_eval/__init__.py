@@ -1,6 +1,7 @@
 """Shared utilities for benchmark evaluation runners."""
 
 from .answer_extraction import GenericAnswerExtractorClient
+from .heuristic_potential import HeuristicPotentialSolver, PotentialResult, TaskHints
 from .io import (
     JsonlPredictionWriter,
     dump_json,
@@ -15,6 +16,7 @@ from .pipeline import evaluate_samples, order_results_by_sample_id
 
 __all__ = [
     "GenericAnswerExtractorClient",
+    "HeuristicPotentialSolver",
     "JsonlPredictionWriter",
     "dump_json",
     "dump_jsonl",
@@ -26,5 +28,7 @@ __all__ = [
     "order_results_by_sample_id",
     "prepare_prediction_file",
     "PromptLengthEstimator",
+    "PotentialResult",
+    "TaskHints",
     "build_local_model_config",
 ]

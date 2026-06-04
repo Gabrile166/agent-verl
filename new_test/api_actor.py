@@ -31,6 +31,11 @@ class APIActorWrapper:
         max_response_length: int = 2048,
         temperature: float = 0.4,
         top_p: float = 1.0,
+        presence_penalty: float | None = None,
+        top_k: int | None = None,
+        min_p: float | None = None,
+        repetition_penalty: float | None = None,
+        enable_thinking: bool | None = None,
         max_tokens: int = 2048,
         timeout: int = 120,
         retries: int = 3,
@@ -45,6 +50,11 @@ class APIActorWrapper:
         self.max_response_length = int(max_response_length)
         self.temperature = float(temperature)
         self.top_p = float(top_p)
+        self.presence_penalty = None if presence_penalty is None else float(presence_penalty)
+        self.top_k = None if top_k is None else int(top_k)
+        self.min_p = None if min_p is None else float(min_p)
+        self.repetition_penalty = None if repetition_penalty is None else float(repetition_penalty)
+        self.enable_thinking = enable_thinking
         self.max_tokens = int(max_tokens)
         self.timeout = int(timeout)
         self.retries = int(retries)
@@ -137,15 +147,34 @@ class APIActorWrapper:
 
         base_url = next(self._url_cycle)
         client = OpenAI(api_key=self.api_key, base_url=base_url, timeout=self.timeout)
-        response = client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            max_tokens=self.max_tokens,
-        )
+        request_kwargs: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "max_tokens": self.max_tokens,
+        }
+        if self.presence_penalty is not None:
+            request_kwargs["presence_penalty"] = self.presence_penalty
+
+        extra_body: dict[str, Any] = {}
+        if self.top_k is not None:
+            extra_body["top_k"] = self.top_k
+        if self.min_p is not None:
+            extra_body["min_p"] = self.min_p
+        if self.repetition_penalty is not None:
+            extra_body["repetition_penalty"] = self.repetition_penalty
+        if self.enable_thinking is not None:
+            extra_body["chat_template_kwargs"] = {"enable_thinking": bool(self.enable_thinking)}
+        if extra_body:
+            request_kwargs["extra_body"] = extra_body
+
+        response = client.chat.completions.create(**request_kwargs)
         content = response.choices[0].message.content
-        return content or ""
+        if content:
+            return content
+        reasoning = getattr(response.choices[0].message, "reasoning", None)
+        return reasoning or ""
 
     def _encode_response(self, text: str, eos_token_id: int) -> list[int]:
         ids = self.tokenizer.encode(text or "", add_special_tokens=False)

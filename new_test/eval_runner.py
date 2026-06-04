@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,15 +18,25 @@ from transformers import AutoTokenizer
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+ALFWORLD_VENDOR = REPO_ROOT / "agent_system" / "environments" / "env_package" / "alfworld"
+SCIWORLD_VENDOR = REPO_ROOT / "agent_system" / "environments" / "env_package" / "sciworld" / "ScienceWorld"
+for vendor_path in (ALFWORLD_VENDOR, SCIWORLD_VENDOR):
+    if vendor_path.exists() and str(vendor_path) not in sys.path:
+        sys.path.insert(0, str(vendor_path))
+PYTHONPATH_PARTS = [str(REPO_ROOT), str(ALFWORLD_VENDOR), str(SCIWORLD_VENDOR)]
+os_environ_pythonpath = ":".join(PYTHONPATH_PARTS + [os_path for os_path in [os.environ.get("PYTHONPATH", "")] if os_path])
+os.environ["PYTHONPATH"] = os_environ_pythonpath
 
 from agent_system.environments import make_envs  # noqa: E402
 from agent_system.multi_turn_rollout import TrajectoryCollector  # noqa: E402
 from agent_system.reward_manager.episode import EpisodeRewardManager  # noqa: E402
 from verl import DataProto  # noqa: E402
-from verl.trainer.main_ppo import create_rl_dataset  # noqa: E402
 from verl.utils.dataset.rl_dataset import collate_fn  # noqa: E402
 
-from api_actor import APIActorWrapper  # noqa: E402
+try:
+    from api_actor import APIActorWrapper  # noqa: E402
+except ImportError:
+    from new_test.api_actor import APIActorWrapper  # noqa: E402
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -82,6 +93,8 @@ def build_gen_batch(config, tokenizer) -> DataProto:
     if val_files in (None, "null", ""):
         return build_dummy_gen_batch(int(config.data.val_batch_size), tokenizer, config)
 
+    from verl.trainer.main_ppo import create_rl_dataset
+
     dataset = create_rl_dataset(val_files, config.data, tokenizer, processor=None)
     dataloader = DataLoader(
         dataset,
@@ -117,7 +130,12 @@ def init_ray(config) -> None:
     group_n = int(config.env.rollout.n) if int(config.env.rollout.n) > 0 else 1
     worker_cpus = float(config.env.resources_per_worker.get("num_cpus", 1))
     ray_num_cpus = int((int(config.data.train_batch_size) * group_n + int(config.data.val_batch_size)) * worker_cpus) + 2
-    ray.init(num_cpus=max(ray_num_cpus, 2), include_dashboard=False, ignore_reinit_error=True)
+    ray.init(
+        num_cpus=max(ray_num_cpus, 2),
+        include_dashboard=False,
+        ignore_reinit_error=True,
+        runtime_env={"env_vars": {"PYTHONPATH": os_environ_pythonpath}},
+    )
 
 
 def load_tokenizer(config):
@@ -217,6 +235,11 @@ def main() -> None:
             max_response_length=int(config.data.max_response_length),
             temperature=float(config.api.get("temperature", 0.4)),
             top_p=float(config.api.get("top_p", 1.0)),
+            presence_penalty=config.api.get("presence_penalty", None),
+            top_k=config.api.get("top_k", None),
+            min_p=config.api.get("min_p", None),
+            repetition_penalty=config.api.get("repetition_penalty", None),
+            enable_thinking=config.api.get("enable_thinking", None),
             max_tokens=int(config.api.get("max_tokens", config.data.max_response_length)),
             timeout=int(config.api.get("timeout", 120)),
         )

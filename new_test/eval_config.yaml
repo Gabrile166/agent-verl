@@ -1,25 +1,30 @@
 # Eval-only config for API-backed ALFWorld/SciWorld runs.
 
 api:
-  base_urls: ["http://127.0.0.1:8080/v1"]
-  model_name: "Qwen2.5-7B-Instruct"
+  base_urls: ["http://localhost:8000/v1"]
+  model_name: "Qwen3.5-9B-AWQ-4bit"
   api_key: "EMPTY"
-  temperature: 0.4
-  top_p: 1.0
-  max_tokens: 2048
+  temperature: 0.7
+  top_p: 0.8
+  presence_penalty: 1.5
+  top_k: 20
+  min_p: 0.0
+  repetition_penalty: 1.0
+  enable_thinking: false
+  max_tokens: 512
   timeout: 120
 
 model:
   # Must be tokenizer-compatible with api.model_name.
-  path: "Qwen/Qwen2.5-7B-Instruct"
+  path: "/home/gabriel/model/Qwen3.5-9B-AWQ-4bit"
   trust_remote_code: false
 
 data:
   val_files: null
   train_batch_size: 1
-  val_batch_size: 4
+  val_batch_size: 1
   max_prompt_length: 4096
-  max_response_length: 2048
+  max_response_length: 512
   truncation: "left"
   return_raw_chat: true
   apply_chat_template_kwargs: {}
@@ -28,7 +33,7 @@ env:
   env_name: "alfworld/AlfredTWEnv"
   seed: 42
   success_reward: 10.0
-  max_steps: 5
+  max_steps: 2
   history_length: 10
   resources_per_worker:
     num_cpus: 0.1

@@ -1,0 +1,60 @@
+# Eval-only config for API-backed ALFWorld/SciWorld runs.
+
+api:
+  base_urls: ["http://127.0.0.1:8080/v1"]
+  model_name: "Qwen2.5-7B-Instruct"
+  api_key: "EMPTY"
+  temperature: 0.4
+  top_p: 1.0
+  max_tokens: 2048
+  timeout: 120
+
+model:
+  # Must be tokenizer-compatible with api.model_name.
+  path: "Qwen/Qwen2.5-7B-Instruct"
+  trust_remote_code: false
+
+data:
+  val_files: null
+  train_batch_size: 1
+  val_batch_size: 4
+  max_prompt_length: 4096
+  max_response_length: 2048
+  truncation: "left"
+  return_raw_chat: true
+  apply_chat_template_kwargs: {}
+
+env:
+  env_name: "alfworld/AlfredTWEnv"
+  seed: 42
+  success_reward: 10.0
+  max_steps: 5
+  history_length: 10
+  resources_per_worker:
+    num_cpus: 0.1
+    num_gpus: 0
+  rollout:
+    n: 1
+  alfworld:
+    eval_dataset: "eval_out_of_distribution"
+  sciworld:
+    generalization_level: 1
+    simplifications_preset: "easy"
+    env_step_limit: 100
+    jar_path: null
+    meta_think: false
+
+algorithm:
+  filter_groups:
+    enable: false
+    max_num_gen_batches: 1
+  trajectory_save:
+    enable: false
+    output_dir: null
+  expert:
+    enable: false
+
+eval:
+  output_dir: "./new_test/eval_results"
+  log_trajectory: true
+  num_examine: 0

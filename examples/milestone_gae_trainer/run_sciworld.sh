@@ -11,39 +11,46 @@ echo "Cleaning up existing Ray processes..."
 ray stop --force 2>/dev/null || true
 sleep 2
 
-export http_proxy="http://10.70.11.190:8412"
-export https_proxy="http://10.70.11.190:8412"
-export no_proxy="localhost,127.0.0.1,0.0.0.0"
+# export http_proxy="http://10.70.11.190:8412"
+# export https_proxy="http://10.70.11.190:8412"
+# export no_proxy="localhost,127.0.0.1,0.0.0.0"
 
-export MY_TEMP_DIR="/workdir/temp_cache/${USER}/${EXP_NAME}"
-mkdir -p $MY_TEMP_DIR
+# export MY_TEMP_DIR="/workdir/temp_cache/${USER}/${EXP_NAME}"
+# mkdir -p $MY_TEMP_DIR
 
-export RAY_TMPDIR="${MY_TEMP_DIR}/ray"
-mkdir -p $RAY_TMPDIR
+# export RAY_TMPDIR="${MY_TEMP_DIR}/ray"
+# mkdir -p $RAY_TMPDIR
 
-export TORCH_COMPILE_CACHE_DIR="${MY_TEMP_DIR}/torch_compile_cache"
-export VLLM_CACHE_DIR="${MY_TEMP_DIR}/vllm_cache"
-export TRITON_CACHE_DIR="${MY_TEMP_DIR}/triton_cache"
-mkdir -p $TORCH_COMPILE_CACHE_DIR $VLLM_CACHE_DIR $TRITON_CACHE_DIR
+# export TORCH_COMPILE_CACHE_DIR="${MY_TEMP_DIR}/torch_compile_cache"
+# export VLLM_CACHE_DIR="${MY_TEMP_DIR}/vllm_cache"
+# export TRITON_CACHE_DIR="${MY_TEMP_DIR}/triton_cache"
+# mkdir -p $TORCH_COMPILE_CACHE_DIR $VLLM_CACHE_DIR $TRITON_CACHE_DIR
 
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-export ALFWORLD_DATA=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/.cache/alfworld
 
 # Ray configuration to prevent worker explosion
 export RAY_DEDUP_LOGS=0
 
-source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
-conda activate asignment
-export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/asignment/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
+# source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
+# conda activate asignment
+# export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/asignment/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
 export PYTHONUTF8=1
-
+source /mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin/.bashrc
 num_cpus_per_env_worker=0.15 # The CPU resource allocated for each environment worker.
 
 # ===================== Configuration =====================
-MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-3B-Instruct
-BASE_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin
-EXP_NAME=sciworld_milestone_gae_qwen2.5_3b
-
+# MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-3B-Instruct
+BASE_PATH=/mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin
+# 自动解析模型规模
+if [[ $MODEL_PATH == *"3B"* ]]; then
+    MODEL_SIZE="3b"
+elif [[ $MODEL_PATH == *"7B"* ]]; then
+    MODEL_SIZE="7b"
+else
+    echo "Unknown model size in MODEL_PATH"
+    exit 1
+fi
+EXP_NAME="sciworld_milestone_gae_qwen2.5_${MODEL_SIZE}"
 train_data_size=16
 val_data_size=128
 group_size=8
@@ -54,8 +61,7 @@ MILESTONE_LAMBDA=0.95
 MILESTONE_COST=0.05
 
 # Judge LLM Configuration (for milestone evaluation)
-JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://127.0.0.1:8080/v1"}
-JUDGE_LLM_URL_2=${JUDGE_LLM_URL_2:-"http://127.0.0.1:8081/v1"}
+JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://10.102.217.37:8081/v1"}
 JUDGE_LLM_MODEL=${JUDGE_LLM_MODEL:-"Qwen3-VL-32B-Instruct-FP8"}
 
 # Dynamic Milestone Generation Configuration
@@ -65,18 +71,25 @@ GENERATOR_NUM_MILESTONES=${GENERATOR_NUM_MILESTONES:-5}
 # Fallback: We skip static templates for SciWorld
 MILESTONE_TEMPLATE="none"
 
+export WANDB_API_KEY=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
+export WANDB_MODE=offline
+export WANDB_DIR=/mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin/wandb/${EXP_NAME}
+mkdir -p ${WANDB_DIR}
+
+SEED=42
+
 # ===================== Training =====================
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=milestone_gae \
     algorithm.milestone_gae.gamma=$MILESTONE_GAMMA \
     algorithm.milestone_gae.lam=$MILESTONE_LAMBDA \
     algorithm.milestone_gae.cost=$MILESTONE_COST \
-    'algorithm.milestone_gae.judge_llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
+    'algorithm.milestone_gae.judge_llm.base_urls=["'$JUDGE_LLM_URL_1'"]' \
     algorithm.milestone_gae.judge_llm.model=$JUDGE_LLM_MODEL \
     algorithm.milestone_gae.judge_llm.temperature=0.1 \
     algorithm.milestone_gae.generator.enable=$GENERATOR_ENABLE \
     algorithm.milestone_gae.generator.num_milestones=$GENERATOR_NUM_MILESTONES \
-    'algorithm.milestone_gae.generator.llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
+    'algorithm.milestone_gae.generator.llm.base_urls=["'$JUDGE_LLM_URL_1'"]' \
     algorithm.milestone_gae.generator.llm.model=$JUDGE_LLM_MODEL \
     algorithm.milestone_gae.generator.llm.temperature=0.3 \
     algorithm.milestone_gae.fallback_template=$MILESTONE_TEMPLATE \
@@ -85,10 +98,11 @@ python3 -m verl.trainer.main_ppo \
     algorithm.trajectory_save.output_dir=$BASE_PATH/agent-verl/output/$EXP_NAME \
     data.train_files=$BASE_PATH/data/verl-agent/text/train.parquet \
     data.val_files=$BASE_PATH/data/verl-agent/text/test.parquet \
+    data.seed=$SEED \
     data.train_batch_size=$train_data_size \
     data.val_batch_size=$val_data_size \
-    data.max_prompt_length=4096 \
-    data.max_response_length=2048 \
+    data.max_prompt_length=6000 \
+    data.max_response_length=1024 \
     data.filter_overlong_prompts=True \
     data.truncation='left' \
     data.return_raw_chat=True \
@@ -121,16 +135,16 @@ python3 -m verl.trainer.main_ppo \
     env.env_name=sciworld/ScienceWorldEnv \
     env.sciworld.generalization_level=1 \
     env.sciworld.env_step_limit=100 \
-    env.seed=0 \
-    env.max_steps=100 \
-    env.history_length=10 \
+    env.seed=$SEED \
+    env.max_steps=30 \
+    env.history_length=2 \
     env.rollout.n=$group_size \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     ray_init.num_cpus=96 \
     trainer.ray_wait_register_center_timeout=600 \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
-    trainer.project_name='milestone_gae_sciworld' \
+    trainer.project_name='latest' \
     trainer.experiment_name=$EXP_NAME \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \

@@ -1,0 +1,6 @@
+# pack-refs with: peeled fully-peeled sorted 
+48854ff80e65b3ab3770bc09412ad4288d73dc25 refs/remotes/origin/dependabot/pip/sglang-all--0.4.10.post2
+73e4090a7105083a5e448477ae8641e9227c79af refs/remotes/origin/dependabot/pip/tensordict-lte-0.10.0
+8ebd8133020fa4881e5935a714f0416b4ab00f3d refs/remotes/origin/dependabot/pip/tokenizers-0.22.2
+d629d723c0c2d2278e433bc2ee0e37797856f915 refs/remotes/origin/dependabot/pip/transformers-4.57.6
+073af8756104ae232beee9db30c6d8f6916284f3 refs/remotes/origin/main

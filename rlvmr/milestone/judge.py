@@ -313,6 +313,12 @@ Notes:
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=self.temperature,
+                    max_tokens=32768,
+                    extra_body={
+                        "chat_template_kwargs": {
+                            "enable_thinking": False, 
+                        }
+                    }
                 )
                 response_text = response.choices[0].message.content
                 return self._parse_response_with_phi_map(response_text, len(trajectory), local_phi_map)
@@ -351,7 +357,8 @@ Notes:
         
         n = len(task_descriptions)
         if max_workers is None:
-            max_workers = len(self.clients) * 4
+            # max_workers = len(self.clients) * 4
+            max_workers = 128
         
         results = [None] * n
         

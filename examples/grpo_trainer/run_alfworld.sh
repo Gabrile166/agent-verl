@@ -9,40 +9,60 @@ sleep 2
 
 
 export RAY_worker_register_timeout_seconds=600
-export http_proxy="http://10.70.11.190:8412"
-export https_proxy="http://10.70.11.190:8412"
-export no_proxy="localhost,127.0.0.1,0.0.0.0"
+# export http_proxy="http://10.70.11.190:8412"
+# export https_proxy="http://10.70.11.190:8412"
+# export no_proxy="localhost,127.0.0.1,0.0.0.0"
 
-export MY_TEMP_DIR="/workdir/temp_cache/${USER}/${EXP_NAME}"
-mkdir -p $MY_TEMP_DIR
+# export MY_TEMP_DIR="/workdir/temp_cache/${USER}/${EXP_NAME}"
+# mkdir -p $MY_TEMP_DIR
 
-export RAY_TMPDIR="${MY_TEMP_DIR}/ray"
-mkdir -p $RAY_TMPDIR
+# export RAY_TMPDIR="${MY_TEMP_DIR}/ray"
+# mkdir -p $RAY_TMPDIR
 
-export TORCH_COMPILE_CACHE_DIR="${MY_TEMP_DIR}/torch_compile_cache"
-export VLLM_CACHE_DIR="${MY_TEMP_DIR}/vllm_cache"
-export TRITON_CACHE_DIR="${MY_TEMP_DIR}/triton_cache"
-mkdir -p $TORCH_COMPILE_CACHE_DIR $VLLM_CACHE_DIR $TRITON_CACHE_DIR
+# export TORCH_COMPILE_CACHE_DIR="${MY_TEMP_DIR}/torch_compile_cache"
+# export VLLM_CACHE_DIR="${MY_TEMP_DIR}/vllm_cache"
+# export TRITON_CACHE_DIR="${MY_TEMP_DIR}/triton_cache"
+# mkdir -p $TORCH_COMPILE_CACHE_DIR $VLLM_CACHE_DIR $TRITON_CACHE_DIR
 
-export VLLM_ATTENTION_BACKEND=XFORMERS
-export ALFWORLD_DATA=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/.cache/alfworld
+export VLLM_ATTENTION_BACKEND=FLASH_ATTN
+export ALFWORLD_DATA=/mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin/.cache/alfworld
 
 # Ray configuration to prevent worker explosion
 export RAY_DEDUP_LOGS=0
 
-source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
-conda activate rlvmr-alfworld
-export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/rlvmr-alfworld/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
+# source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
+# conda activate rlvmr-alfworld
+# export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/rlvmr-alfworld/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
+export PYTHONUTF8=1
+source /mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin/.bashrc
+num_cpus_per_env_worker=0.15 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
 
-num_cpus_per_env_worker=1 # The CPU resource allocated for each environment worker. If you want to use less CPU resources, you can decrease this value.
+# MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-7B-Instruct
+BASE_PATH=/mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin
 
-MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-7B-Instruct
-BASE_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin
-
+if [[ $MODEL_PATH == *"3B"* ]]; then
+    MODEL_SIZE="3b"
+    MODEL_FAMILY="qwen2.5"
+elif [[ $MODEL_PATH == *"4B"* ]]; then
+    MODEL_SIZE="4b"
+    MODEL_FAMILY="qwen3"
+elif [[ $MODEL_PATH == *"7B"* ]]; then
+    MODEL_SIZE="7b"
+    MODEL_FAMILY="qwen2.5"
+else
+    echo "Unknown model size in MODEL_PATH"
+    exit 1
+fi
+EXP_NAME="alfworld_grpo_${MODEL_FAMILY}_${MODEL_SIZE}_seed_${SEED}_ood"
 
 train_data_size=16
 val_data_size=128
 group_size=8
+
+export WANDB_API_KEY=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
+export WANDB_MODE=offline
+export WANDB_DIR=/mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin/wandb/${EXP_NAME}
+mkdir -p ${WANDB_DIR}
 
 # # We only use data preparation to indicate the modality and the data size.
 # python3 -m examples.data_preprocess.prepare \
@@ -56,8 +76,8 @@ python3 -m verl.trainer.main_ppo \
     data.val_files=$BASE_PATH/data/verl-agent/text/test.parquet \
     data.train_batch_size=$train_data_size \
     data.val_batch_size=$val_data_size \
-    data.max_prompt_length=2048 \
-    data.max_response_length=1024 \
+    data.max_prompt_length=8192 \
+    data.max_response_length=4096 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     data.return_raw_chat=True \
@@ -89,7 +109,8 @@ python3 -m verl.trainer.main_ppo \
     env.env_name=alfworld/AlfredTWEnv \
     env.alfworld.eval_dataset='eval_out_of_distribution' \
     env.seed=0 \
-    env.max_steps=50 \
+    env.max_steps=35 \
+    env.history_length=5 \
     env.rollout.n=$group_size \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     ray_init.num_cpus=96 \
@@ -97,7 +118,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
     trainer.project_name='verl_agent_alfworld' \
-    trainer.experiment_name='grpo_qwen2.5b_7b_ood' \
+    trainer.experiment_name=$EXP_NAME \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=10 \

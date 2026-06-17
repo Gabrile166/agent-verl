@@ -93,6 +93,24 @@ class TestFormatPolicyTrajectory:
         
         assert result['traj'][0]['obs'] == 'You see a table with items on it'
     
+    def test_preserve_task_score_fields(self):
+        """SciWorld task-score diagnostics should flow into formatted policy trajectories."""
+        trajectory = [
+            {
+                'active_masks': True,
+                'full_output': '<action>focus on thermometer</action>',
+                'anchor_obs': 'You are in the workshop.',
+                'task_score_before': 1.0,
+                'task_score_after': 2.5,
+                'task_score_delta': 1.5,
+            }
+        ]
+        result = format_policy_trajectory(trajectory, task="measure temperature")
+
+        assert result['traj'][0]['task_score_before'] == 1.0
+        assert result['traj'][0]['task_score_after'] == 2.5
+        assert result['traj'][0]['task_score_delta'] == 1.5
+
     def test_multiple_steps(self):
         """测试多步轨迹"""
         trajectory = [

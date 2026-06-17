@@ -63,6 +63,13 @@ MILESTONE_COST=0.05
 # Judge LLM Configuration (for milestone evaluation)
 JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://10.102.217.37:8081/v1"}
 JUDGE_LLM_MODEL=${JUDGE_LLM_MODEL:-"Qwen3-VL-32B-Instruct-FP8"}
+JUDGE_LLM_MAX_TOKENS=${JUDGE_LLM_MAX_TOKENS:-32768}
+JUDGE_LLM_DISABLE_THINKING=${JUDGE_LLM_DISABLE_THINKING:-true}
+
+# Judge Input Configuration
+JUDGE_INCLUDE_TASK_SCORE=${JUDGE_INCLUDE_TASK_SCORE:-true}
+JUDGE_CHUNK_SIZE=${JUDGE_CHUNK_SIZE:-10}
+JUDGE_CHUNK_OVERLAP=${JUDGE_CHUNK_OVERLAP:-1}
 
 # Dynamic Milestone Generation Configuration
 GENERATOR_ENABLE=${GENERATOR_ENABLE:-true}
@@ -87,6 +94,11 @@ python3 -m verl.trainer.main_ppo \
     'algorithm.milestone_gae.judge_llm.base_urls=["'$JUDGE_LLM_URL_1'"]' \
     algorithm.milestone_gae.judge_llm.model=$JUDGE_LLM_MODEL \
     algorithm.milestone_gae.judge_llm.temperature=0.1 \
+    algorithm.milestone_gae.judge_llm.max_tokens=$JUDGE_LLM_MAX_TOKENS \
+    algorithm.milestone_gae.judge_llm.disable_thinking=$JUDGE_LLM_DISABLE_THINKING \
+    algorithm.milestone_gae.judge_input.include_task_score=$JUDGE_INCLUDE_TASK_SCORE \
+    algorithm.milestone_gae.judge_input.chunk_size=$JUDGE_CHUNK_SIZE \
+    algorithm.milestone_gae.judge_input.chunk_overlap=$JUDGE_CHUNK_OVERLAP \
     algorithm.milestone_gae.generator.enable=$GENERATOR_ENABLE \
     algorithm.milestone_gae.generator.num_milestones=$GENERATOR_NUM_MILESTONES \
     'algorithm.milestone_gae.generator.llm.base_urls=["'$JUDGE_LLM_URL_1'"]' \

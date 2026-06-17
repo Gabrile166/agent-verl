@@ -7,6 +7,7 @@ This replaces static JSON templates with dynamic, task-specific milestones.
 
 import json
 import re
+import threading
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -69,14 +70,15 @@ Output format (strict JSON):
 
     def __init__(
         self,
-        base_urls: List[str],
-        model: str,
+        base_urls: Optional[List[str]] = None,
+        model: str = "",
         api_key: str = "EMPTY",
         temperature: float = 0.3,
         max_retries: int = 3,
         min_milestones: int = 4,
         max_milestones: int = 10,
         num_milestones: int = 5,  # kept for backward compat (used in default fallback)
+        base_url: Optional[str] = None,
     ):
         """
         初始化 MilestoneGenerator
@@ -93,6 +95,10 @@ Output format (strict JSON):
         """
         if OpenAI is None:
             raise ImportError("openai package is required. Install with: pip install openai")
+        if base_urls is None:
+            base_urls = [base_url or "http://127.0.0.1:8080/v1"]
+        elif isinstance(base_urls, str):
+            base_urls = [base_urls]
         
         # 支持多 URL 负载均衡
         self.clients = []
@@ -102,10 +108,18 @@ Output format (strict JSON):
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
-        self.min_milestones = min_milestones
+        self.min_milestones = min(min_milestones, num_milestones)
         self.max_milestones = max_milestones
         self.num_milestones = num_milestones
         self._call_index = 0  # 用于轮询负载均衡
+        self._call_index_lock = threading.Lock()
+
+    def _next_client_index(self) -> int:
+        """Thread-safe round-robin client selection."""
+        with self._call_index_lock:
+            client_idx = self._call_index % len(self.clients)
+            self._call_index += 1
+        return client_idx
     
     def _format_trajectory(self, trajectory: List[Dict]) -> str:
         """格式化轨迹为可读字符串"""
@@ -197,8 +211,7 @@ Output format (strict JSON):
         prompt = self._build_prompt(task_description, expert_trajectory)
         
         # 轮询选择 client
-        client_idx = self._call_index % len(self.clients)
-        self._call_index += 1
+        client_idx = self._next_client_index()
         
         for attempt in range(self.max_retries):
             # 在不同 URL 之间轮换尝试

@@ -71,8 +71,8 @@ MILESTONE_LAMBDA=0.95
 MILESTONE_COST=0.05
 
 # Judge LLM Configuration (for milestone evaluation)
-JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://10.102.208.26:8082/v1"}
-# JUDGE_LLM_URL_2=${JUDGE_LLM_URL_2:-"http://10.102.208.26:8082/v1"}
+JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://10.102.241.43:8081/v1"}
+JUDGE_LLM_URL_2=${JUDGE_LLM_URL_2:-"http://10.102.241.43:8082/v1"}
 JUDGE_LLM_MODEL=${JUDGE_LLM_MODEL:-"Qwen3-VL-32B-Instruct-FP8"}
 
 # Dynamic Milestone Generation Configuration

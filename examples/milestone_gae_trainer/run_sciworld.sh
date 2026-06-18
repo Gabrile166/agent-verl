@@ -41,16 +41,26 @@ num_cpus_per_env_worker=0.15 # The CPU resource allocated for each environment w
 # ===================== Configuration =====================
 # MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-3B-Instruct
 BASE_PATH=/mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin
+SEED=${SEED:-42}
+if [[ -z "$MODEL_PATH" ]]; then
+    echo "MODEL_PATH is required. Please export MODEL_PATH before running this script."
+    exit 1
+fi
 # 自动解析模型规模
 if [[ $MODEL_PATH == *"3B"* ]]; then
     MODEL_SIZE="3b"
+    MODEL_FAMILY="qwen2.5"
+elif [[ $MODEL_PATH == *"4B"* ]]; then
+    MODEL_SIZE="4b"
+    MODEL_FAMILY="qwen3"
 elif [[ $MODEL_PATH == *"7B"* ]]; then
     MODEL_SIZE="7b"
+    MODEL_FAMILY="qwen2.5"
 else
     echo "Unknown model size in MODEL_PATH"
     exit 1
 fi
-EXP_NAME="sciworld_milestone_gae_qwen2.5_${MODEL_SIZE}"
+EXP_NAME="sciworld_milestone_gae_${MODEL_FAMILY}_${MODEL_SIZE}_seed_${SEED}_ood"
 train_data_size=16
 val_data_size=128
 group_size=8
@@ -61,7 +71,7 @@ MILESTONE_LAMBDA=0.95
 MILESTONE_COST=0.05
 
 # Judge LLM Configuration (for milestone evaluation)
-JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://10.102.217.37:8081/v1"}
+JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://10.102.208.26:8082/v1"}
 JUDGE_LLM_MODEL=${JUDGE_LLM_MODEL:-"Qwen3-VL-32B-Instruct-FP8"}
 JUDGE_LLM_MAX_TOKENS=${JUDGE_LLM_MAX_TOKENS:-32768}
 JUDGE_LLM_DISABLE_THINKING=${JUDGE_LLM_DISABLE_THINKING:-true}
@@ -82,8 +92,6 @@ export WANDB_API_KEY=wandb_v1_ZFin7kAjctfvOkPg1PMcsKXZdf0_S64jb3ypWGBsMp8JjJ1HPp
 export WANDB_MODE=offline
 export WANDB_DIR=/mnt/shared-storage-user/ailab-hs/zhaojun/tangjixin/wandb/${EXP_NAME}
 mkdir -p ${WANDB_DIR}
-
-SEED=42
 
 # ===================== Training =====================
 python3 -m verl.trainer.main_ppo \
@@ -156,7 +164,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.ray_wait_register_center_timeout=600 \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
-    trainer.project_name='latest' \
+    trainer.project_name='milestone_gae_sciworld' \
     trainer.experiment_name=$EXP_NAME \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \

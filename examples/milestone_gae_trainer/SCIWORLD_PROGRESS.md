@@ -156,7 +156,7 @@ pkill -9 -f java
 ray stop --force
 
 # Run SciWorld training
-cd /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/agent-verl
+cd /path/to/agent-verl
 bash examples/milestone_gae_trainer/run_sciworld.sh
 
 # Check thread/process limits

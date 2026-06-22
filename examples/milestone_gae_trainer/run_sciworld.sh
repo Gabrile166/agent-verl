@@ -1,102 +1,82 @@
-#!/bin/bash
-# Milestone-Guided GAE Training Script for SciWorld
-# This script demonstrates how to use the MilestoneGAE advantage estimator
-# with LLM Judge for milestone evaluation on SciWorld environment.
+#!/usr/bin/env bash
+# Reproducible Milestone-GAE training script for SciWorld.
+#
+# Usage:
+#   bash examples/milestone_gae_trainer/run_sciworld.sh [vllm] [hydra overrides...]
 
-# set -x
-ENGINE=${1:-vllm}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../release_common.sh
+source "${SCRIPT_DIR}/../release_common.sh"
 
-# Clean up any existing Ray processes first
-echo "Cleaning up existing Ray processes..."
-ray stop --force 2>/dev/null || true
-sleep 2
+release_parse_engine "$@"
+set -- "${REMAINING_ARGS[@]}"
+[[ "${DEBUG:-0}" == "1" ]] && set -x
 
-export http_proxy="http://10.70.11.190:8412"
-export https_proxy="http://10.70.11.190:8412"
-export no_proxy="localhost,127.0.0.1,0.0.0.0"
+EXP_NAME="${EXP_NAME:-milestone_gae_qwen2_5_7b_sciworld_l1_seed64}"
+PROJECT_NAME="${PROJECT_NAME:-milestone_gae_sciworld}"
+MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-7B-Instruct}"
+BASE_PATH="${BASE_PATH:-${REPO_ROOT}}"
+DATA_DIR="${DATA_DIR:-${BASE_PATH}/data/verl-agent/text}"
+OUTPUT_DIR="${OUTPUT_DIR:-${BASE_PATH}/output/${EXP_NAME}}"
+TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-16}"
+VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-128}"
+GROUP_SIZE="${GROUP_SIZE:-8}"
+NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-8}"
+NNODES="${NNODES:-1}"
+RAY_NUM_CPUS="${RAY_NUM_CPUS:-96}"
+NUM_CPUS_PER_ENV_WORKER="${NUM_CPUS_PER_ENV_WORKER:-0.15}"
+TRAINER_LOGGER="${TRAINER_LOGGER:-['console','wandb']}"
 
-export MY_TEMP_DIR="/workdir/temp_cache/${USER}/${EXP_NAME}"
-mkdir -p $MY_TEMP_DIR
+MILESTONE_GAMMA="${MILESTONE_GAMMA:-0.99}"
+MILESTONE_LAMBDA="${MILESTONE_LAMBDA:-0.95}"
+MILESTONE_COST="${MILESTONE_COST:-0.05}"
+GENERATOR_ENABLE="${GENERATOR_ENABLE:-true}"
+GENERATOR_NUM_MILESTONES="${GENERATOR_NUM_MILESTONES:-5}"
+MILESTONE_TEMPLATE="${MILESTONE_TEMPLATE:-none}"
+JUDGE_LLM_MODEL="${JUDGE_LLM_MODEL:-Qwen3-VL-32B-Instruct-FP8}"
+JUDGE_LLM_URL_1="${JUDGE_LLM_URL_1:-http://127.0.0.1:8080/v1}"
+JUDGE_LLM_URL_2="${JUDGE_LLM_URL_2:-http://127.0.0.1:8081/v1}"
+JUDGE_LLM_BASE_URLS="${JUDGE_LLM_BASE_URLS:-[\"${JUDGE_LLM_URL_1}\",\"${JUDGE_LLM_URL_2}\"]}"
 
-export RAY_TMPDIR="${MY_TEMP_DIR}/ray"
-mkdir -p $RAY_TMPDIR
+export VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
+export PYTHONUTF8="${PYTHONUTF8:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
 
-export TORCH_COMPILE_CACHE_DIR="${MY_TEMP_DIR}/torch_compile_cache"
-export VLLM_CACHE_DIR="${MY_TEMP_DIR}/vllm_cache"
-export TRITON_CACHE_DIR="${MY_TEMP_DIR}/triton_cache"
-mkdir -p $TORCH_COMPILE_CACHE_DIR $VLLM_CACHE_DIR $TRITON_CACHE_DIR
+release_activate_conda
+release_prepare_runtime "${EXP_NAME}"
+release_chat_template_args
 
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN
-export ALFWORLD_DATA=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/.cache/alfworld
-
-# Ray configuration to prevent worker explosion
-export RAY_DEDUP_LOGS=0
-
-source /mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/setupconda.sh
-conda activate verl-agent
-export PATH="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/envs/verl-agent/bin:/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin/conda3/anaconda3/condabin:$PATH"
-
-export PYTHONUTF8=1
-
-export WANDB_MODE=offline
-
-num_cpus_per_env_worker=0.15 # The CPU resource allocated for each environment worker.
-
-# ===================== Configuration =====================
-MODEL_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/common/HF_MODELS/Qwen2.5-7B-Instruct
-BASE_PATH=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-mlm-hl/hadoop-mlm/tangjixin
-# EXP_NAME=mt_sciworld_grpo_qwen2.5_7b_seed64
-EXP_NAME=mt_sciworld_milestone_qwen2.5_7b_seed64_30
-
-train_data_size=16
-val_data_size=128
-group_size=8
-
-# Milestone GAE Configuration
-MILESTONE_GAMMA=0.99
-MILESTONE_LAMBDA=0.95
-MILESTONE_COST=0.05
-
-# Judge LLM Configuration (for milestone evaluation)
-JUDGE_LLM_URL_1=${JUDGE_LLM_URL_1:-"http://127.0.0.1:8080/v1"}
-JUDGE_LLM_URL_2=${JUDGE_LLM_URL_2:-"http://127.0.0.1:8081/v1"}
-JUDGE_LLM_MODEL=${JUDGE_LLM_MODEL:-"Qwen3-VL-32B-Instruct-FP8"}
-
-# Dynamic Milestone Generation Configuration
-GENERATOR_ENABLE=${GENERATOR_ENABLE:-true}
-GENERATOR_NUM_MILESTONES=${GENERATOR_NUM_MILESTONES:-5}
-
-# Fallback: We skip static templates for SciWorld
-MILESTONE_TEMPLATE="none"
-
-# ===================== Training =====================
 python3 -m verl.trainer.main_ppo \
+    "${CHAT_TEMPLATE_ARGS[@]}" \
     algorithm.adv_estimator=milestone_gae \
-    algorithm.milestone_gae.gamma=$MILESTONE_GAMMA \
-    algorithm.milestone_gae.lam=$MILESTONE_LAMBDA \
-    algorithm.milestone_gae.cost=$MILESTONE_COST \
-    'algorithm.milestone_gae.judge_llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
-    algorithm.milestone_gae.judge_llm.model=$JUDGE_LLM_MODEL \
+    "algorithm.milestone_gae.gamma=${MILESTONE_GAMMA}" \
+    "algorithm.milestone_gae.lam=${MILESTONE_LAMBDA}" \
+    "algorithm.milestone_gae.cost=${MILESTONE_COST}" \
+    "algorithm.milestone_gae.judge_llm.base_urls=${JUDGE_LLM_BASE_URLS}" \
+    "algorithm.milestone_gae.judge_llm.model=${JUDGE_LLM_MODEL}" \
     algorithm.milestone_gae.judge_llm.temperature=0.6 \
-    algorithm.milestone_gae.generator.enable=$GENERATOR_ENABLE \
-    algorithm.milestone_gae.generator.num_milestones=$GENERATOR_NUM_MILESTONES \
-    'algorithm.milestone_gae.generator.llm.base_urls=["'$JUDGE_LLM_URL_1'","'$JUDGE_LLM_URL_2'"]' \
-    algorithm.milestone_gae.generator.llm.model=$JUDGE_LLM_MODEL \
+    "algorithm.milestone_gae.generator.enable=${GENERATOR_ENABLE}" \
+    "algorithm.milestone_gae.generator.num_milestones=${GENERATOR_NUM_MILESTONES}" \
+    "algorithm.milestone_gae.generator.llm.base_urls=${JUDGE_LLM_BASE_URLS}" \
+    "algorithm.milestone_gae.generator.llm.model=${JUDGE_LLM_MODEL}" \
     algorithm.milestone_gae.generator.llm.temperature=0.6 \
-    algorithm.milestone_gae.fallback_template=$MILESTONE_TEMPLATE \
+    "algorithm.milestone_gae.fallback_template=${MILESTONE_TEMPLATE}" \
     algorithm.expert.enable=true \
     algorithm.trajectory_save.enable=true \
-    algorithm.trajectory_save.output_dir=$BASE_PATH/agent-verl/output/$EXP_NAME \
-    data.train_files=$BASE_PATH/data/verl-agent/text/train.parquet \
-    data.val_files=$BASE_PATH/data/verl-agent/text/test.parquet \
-    data.train_batch_size=$train_data_size \
-    data.val_batch_size=$val_data_size \
+    "algorithm.trajectory_save.output_dir=${OUTPUT_DIR}" \
+    "data.train_files=${DATA_DIR}/train.parquet" \
+    "data.val_files=${DATA_DIR}/test.parquet" \
+    "data.train_batch_size=${TRAIN_BATCH_SIZE}" \
+    "data.val_batch_size=${VAL_BATCH_SIZE}" \
     data.max_prompt_length=4096 \
     data.max_response_length=2048 \
     data.filter_overlong_prompts=True \
-    data.truncation='left' \
+    data.truncation=left \
     data.return_raw_chat=True \
-    actor_rollout_ref.model.path=$MODEL_PATH \
+    "actor_rollout_ref.model.path=${MODEL_PATH}" \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
@@ -109,7 +89,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=32 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-    actor_rollout_ref.rollout.name=$ENGINE \
+    "actor_rollout_ref.rollout.name=${ENGINE}" \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.45 \
     actor_rollout_ref.rollout.enable_chunked_prefill=False \
     actor_rollout_ref.rollout.enforce_eager=False \
@@ -128,17 +108,18 @@ python3 -m verl.trainer.main_ppo \
     env.seed=64 \
     env.max_steps=30 \
     env.history_length=2 \
-    env.rollout.n=$group_size \
-    env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
-    ray_init.num_cpus=96 \
+    "env.rollout.n=${GROUP_SIZE}" \
+    "env.resources_per_worker.num_cpus=${NUM_CPUS_PER_ENV_WORKER}" \
+    "ray_init.num_cpus=${RAY_NUM_CPUS}" \
     trainer.ray_wait_register_center_timeout=600 \
     trainer.critic_warmup=0 \
-    trainer.logger=['console','wandb'] \
-    trainer.project_name='milestone_gae_sciworld' \
-    trainer.experiment_name=$EXP_NAME \
-    trainer.n_gpus_per_node=8 \
-    trainer.nnodes=1 \
+    "trainer.logger=${TRAINER_LOGGER}" \
+    "trainer.project_name=${PROJECT_NAME}" \
+    "trainer.experiment_name=${EXP_NAME}" \
+    "trainer.n_gpus_per_node=${NUM_GPUS_PER_NODE}" \
+    "trainer.nnodes=${NNODES}" \
     trainer.save_freq=10 \
     trainer.test_freq=5 \
     trainer.total_epochs=100 \
-    trainer.val_before_train=True $@
+    trainer.val_before_train=True \
+    "$@"

@@ -51,7 +51,7 @@
 **已核实事实**
 
 - SciWorld 底层 `getScore()` 语义是 `[0,1]` 的任务进展分数。
-- Python wrapper 在 [scienceworld.py](D:/Workspace/Agentic/agent-verl/agent_system/environments/env_package/sciworld/ScienceWorld/scienceworld/scienceworld.py#L454) 把它乘以 `100` 并四舍五入成整数 `score`。
+- Python wrapper 在 `agent_system/environments/env_package/sciworld/ScienceWorld/scienceworld/scienceworld.py` 中把它乘以 `100` 并四舍五入成整数 `score`。
 - benchmark 内部统一恢复为：
   `progress_scalar = raw_score / 100.0`
 - SciWorld Python API 提供 `get_goal_progress()`，可返回精确子目标完成状态。

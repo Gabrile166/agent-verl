@@ -118,7 +118,6 @@ python3 -m verl.trainer.main_ppo \
     algorithm.trajectory_save.output_dir=$BASE_PATH/agent-verl/output/$EXP_NAME \
     data.train_files=$BASE_PATH/data/verl-agent/text/train.parquet \
     data.val_files=$BASE_PATH/data/verl-agent/text/test.parquet \
-    data.seed=$SEED \
     data.train_batch_size=$train_data_size \
     data.val_batch_size=$val_data_size \
     data.max_prompt_length=6000 \

@@ -6,9 +6,7 @@
 
 - 训练脚本入口：
   - `examples/grpo_trainer/run_alfworld.sh`
-  - `examples/grpo_trainer/run_webshop.sh`
-  - `examples/grpo_trainer/run_sokoban.sh`
-  - `examples/grpo_trainer/run_balckjack.sh`
+  - `examples/grpo_trainer/run_sciworld.sh`
 - 统一训练入口：
   - `verl/trainer/main_ppo.py`
 - 训练主循环：

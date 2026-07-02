@@ -53,9 +53,9 @@ MODEL_PATH=Qwen/Qwen3-4B ENABLE_THINKING=False bash examples/grpo_trainer/run_sc
 |---|---|---|
 | High | End-to-end training was not run in this review because it requires GPUs, ALFWorld data, SciWorld Java runtime, and judge services. | Run one smoke job per script with `TRAIN_BATCH_SIZE=1`, `GROUP_SIZE=1`, and `TRAINER_LOGGER='[console]'`. |
 | Medium | `examples/doc/grpo_milestone_gae_experiment_details.md` appears as mojibake in this Windows PowerShell session. It may be a terminal decoding issue, but it should be checked before publication. | Open it in a UTF-8 editor and rewrite or remove it if the file itself is corrupted. |
-| Medium | Several long benchmark planning documents are useful internally but are not minimal reproduction docs. | Decide whether to keep them in the public branch, move them under an internal-notes directory, or exclude them before tagging release. |
+| Medium | Several long benchmark planning documents are useful internally but are not minimal reproduction docs. | Removed from the release branch to keep the package focused on paper reproduction. |
 | Medium | SciWorld Milestone-GAE can launch many JVM processes when `TRAIN_BATCH_SIZE` and `GROUP_SIZE` are large. | Document recommended smoke-test settings and cluster resource requirements. |
-| Low | Other GRPO example scripts, such as WebShop/Sokoban/Blackjack, still follow older style and were outside the requested ALFWorld/SciWorld scope. | Normalize them later if they are included in the public release surface. |
+| Low | Non-paper environments and legacy example scripts were outside the requested ALFWorld/SciWorld scope. | Removed from the release branch to reduce package size and avoid misleading entry points. |
 
 ## Validation Performed
 

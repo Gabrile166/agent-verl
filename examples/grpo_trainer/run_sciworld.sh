@@ -72,7 +72,7 @@ python3 -m verl.trainer.main_ppo \
     env.env_name=sciworld/ScienceWorldEnv \
     env.sciworld.generalization_level=1 \
     env.sciworld.env_step_limit=50 \
-    env.seed=0 \
+    env.seed=42 \
     env.max_steps=30 \
     env.history_length=10 \
     "env.rollout.n=${GROUP_SIZE}" \

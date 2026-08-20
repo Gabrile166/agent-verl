@@ -78,7 +78,7 @@ python3 -m verl.trainer.main_ppo \
     algorithm.use_kl_in_reward=False \
     env.env_name=alfworld/AlfredTWEnv \
     env.alfworld.eval_dataset=eval_out_of_distribution \
-    env.seed=0 \
+    env.seed=42 \
     env.max_steps=50 \
     "env.rollout.n=${GROUP_SIZE}" \
     "env.resources_per_worker.num_cpus=${NUM_CPUS_PER_ENV_WORKER}" \

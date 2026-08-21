@@ -25,7 +25,9 @@ Fudan University · Tsinghua University · *Equal contribution</p>
 </div>
 
 <p align="center">
-  <img src="assets/readme/wpm_overview.png" width="100%" alt="World Potential Model overview">
+  <a href="assets/readme/main0817.pdf">
+    <img src="assets/readme/wpm_overview.png" width="100%" alt="World Potential Model overview: pretrained world knowledge as progress potentials">
+  </a>
 </p>
 
 ## What is a World Potential Model?

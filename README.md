@@ -5,7 +5,7 @@
 <p><strong>Official code release for progress-aware training of long-horizon language agents</strong></p>
 
 <p>
-  <a href="https://github.com/Gabrile166/agent-verl/tree/release"><img src="https://img.shields.io/badge/release-v0.3.1-2563eb.svg" alt="Release v0.3.1"></a>
+  <a href="https://github.com/Gabrile166/world-potential-model/tree/release"><img src="https://img.shields.io/badge/release-v0.3.1-2563eb.svg" alt="Release v0.3.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-16a34a.svg" alt="Apache-2.0 license"></a>
   <a href="#quick-start"><img src="https://img.shields.io/badge/python-3.12-3776ab.svg" alt="Python 3.12"></a>
   <a href="#results"><img src="https://img.shields.io/badge/benchmarks-ALFWorld%20%7C%20ScienceWorld-7c3aed.svg" alt="ALFWorld and ScienceWorld"></a>
@@ -99,8 +99,8 @@ The release targets Linux machines with NVIDIA GPUs. Python 3.12 is recommended;
 ### 1. Install
 
 ```bash
-git clone https://github.com/Gabrile166/agent-verl.git
-cd agent-verl
+git clone https://github.com/Gabrile166/world-potential-model.git
+cd world-potential-model
 
 conda create -n wpm python=3.12 -y
 conda activate wpm

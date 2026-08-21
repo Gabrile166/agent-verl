@@ -1,105 +1,130 @@
-# Milestone-GAE for Long-Horizon LLM Agent Training
+<div align="center">
 
-This repository contains the code and reproduction scripts for our paper on
-**Milestone-Guided Generalized Advantage Estimation (Milestone-GAE)** for
-reinforcement learning of long-horizon language agents.
+<h1>World Potential Model</h1>
+<h3>Pretrained World Knowledge as Progress Potentials</h3>
+<p><strong>Official code release for progress-aware training of long-horizon language agents</strong></p>
 
-The project builds on `verl-agent` and `veRL`, and focuses on text-based
-interactive environments where an LLM policy must complete multi-step tasks.
-We compare a **GRPO baseline** with **Milestone-GAE** on ALFWorld and SciWorld
-using Qwen2.5 instruction models.
+<p>
+  <a href="https://github.com/Gabrile166/agent-verl/tree/release"><img src="https://img.shields.io/badge/release-v0.3.1-2563eb.svg" alt="Release v0.3.1"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-16a34a.svg" alt="Apache-2.0 license"></a>
+  <a href="#quick-start"><img src="https://img.shields.io/badge/python-3.12-3776ab.svg" alt="Python 3.12"></a>
+  <a href="#results"><img src="https://img.shields.io/badge/benchmarks-ALFWorld%20%7C%20ScienceWorld-7c3aed.svg" alt="ALFWorld and ScienceWorld"></a>
+</p>
 
-## Overview
+<p>
+  <a href="#what-is-a-world-potential-model">Overview</a> ·
+  <a href="#results">Results</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="examples/RELEASE_REPRODUCTION.md">Reproduction Guide</a> ·
+  <a href="#citation">Citation</a>
+</p>
 
-GRPO is a critic-free baseline that assigns the same outcome-level advantage to
-all steps in a trajectory. This works when final task success is enough, but it
-does not distinguish which intermediate actions actually move the agent closer
-to success.
+<p><strong>Jun Zhao*</strong>, <strong>Jixin Tang*</strong>, Yang Shu, Jinyang Wu, Yuyang Lu, Jingqi Tong, Qi Zhang, Xuanjing Huang<br>
+Fudan University · Tsinghua University · *Equal contribution</p>
 
-Milestone-GAE introduces a process-level credit signal. For each task, an LLM
-generator can produce task-specific milestones, and an LLM judge evaluates each
-trajectory step with a milestone potential:
+</div>
 
-```text
-phi(s_t) in [0, 1]
-```
+<p align="center">
+  <img src="assets/readme/wpm_overview.png" width="100%" alt="World Potential Model overview">
+</p>
 
-The potential is then used as a value-like signal in a GAE-style recursion:
+## What is a World Potential Model?
 
-```text
-delta_t = r_t - cost + gamma * phi(s_{t+1}) - phi(s_t)
-A_t     = delta_t + gamma * lambda * A_{t+1}
-```
+Long-horizon agents usually learn from sparse terminal outcomes: a trajectory is rewarded when the task is complete, but the learner receives little information about which intermediate actions made progress, stalled, or moved backward.
 
-This keeps the PPO actor update pipeline intact while replacing the learned
-critic with an external milestone-based progress estimator.
+A **World Potential Model (WPM)** reuses pretrained world knowledge to evaluate the goal-relevant progress already realized in an agent context. Unlike a value function, a WPM is retrospective rather than predictive: it asks *how much of the task has been accomplished so far?*
 
-## Main Results
+Our paper studies two questions:
 
-`val` is the validation success rate in percent. `step_length` is the average
-episode interaction length. ALFWorld reports the mean over three training seeds.
+1. **Existence:** can off-the-shelf pretrained models recover meaningful progress structure without task-specific evaluator fine-tuning?
+2. **Utility:** can these imperfect progress estimates provide useful supervision for long-horizon policy optimization?
 
-### ALFWorld
+In controlled experiments on **ALFWorld** and **ScienceWorld**, pretrained models recover relative progress substantially above chance. A milestone-anchored WPM then turns those judgments into step-level credit, improving success over outcome-only GRPO in every evaluated configuration while reducing interaction length.
 
-| Method | Model | val | step_length |
-|---|---|---:|---:|
-| GRPO baseline | Qwen2.5-3B | 53.9 | 17.36 |
-| GRPO baseline | Qwen2.5-7B | 68.7 | 14.30 |
-| Milestone-GAE | Qwen2.5-3B | 60.5 | 14.06 |
-| Milestone-GAE | Qwen2.5-7B | 72.1 | 10.71 |
+## Highlights
 
-### SciWorld
+| Progress from pretrained knowledge | Process-sensitive credit | Matched empirical gains |
+|---|---|---|
+| WPMs compare contexts and locate them on task-specific progress anchors without evaluator fine-tuning. | Temporal changes in world potential distinguish progress, stagnation, and regression within a trajectory. | Across six actor-environment comparisons, WPM improves success by **5.08 points on average** and shortens trajectories in all six. |
 
-| Method | Model | val | step_length |
-|---|---|---:|---:|
-| GRPO baseline | Qwen2.5-3B | 51.56 | 17.72 |
-| GRPO baseline | Qwen2.5-7B | 66.40 | 19.52 |
-| Milestone-GAE | Qwen2.5-3B | 55.39 | 12.79 |
-| Milestone-GAE | Qwen2.5-7B | 74.73 | 10.66 |
+## Method at a Glance
 
-## Repository Structure
+For a task goal $g$ and agent context $x_t$, the WPM induces a task-relative potential $\Phi_g(x_t)$:
 
-| Path | Description |
-|---|---|
-| `examples/grpo_trainer/` | GRPO baseline scripts for ALFWorld and SciWorld |
-| `examples/milestone_gae_trainer/` | Milestone-GAE scripts for ALFWorld and SciWorld |
-| `examples/release_common.sh` | Shared release helper for environment setup and script overrides |
-| `examples/RELEASE_REPRODUCTION.md` | Detailed reproduction guide |
-| `examples/doc/grpo_algorithm.md` | GRPO implementation notes |
-| `examples/doc/milestone_gae_algorithm.md` | Milestone-GAE implementation notes |
-| `rlvmr/core_milestone_gae.py` | Core Milestone-GAE advantage computation |
-| `rlvmr/milestone/` | Milestone generator and judge modules |
-| `agent_system/environments/` | ALFWorld and SciWorld environment wrappers |
+1. Generate or provide an ordered set of task-specific milestones.
+2. Use a frozen pretrained model to compare the current context with those progress anchors.
+3. Convert the ordinal judgment into a scalar, task-local world potential.
+4. Use the temporal potential difference as a dense transition signal:
 
-## Installation
+$$
+r_t^{\mathrm{WP}} = \bar r_t + \gamma \Phi_g(x_{t+1}) - \Phi_g(x_t).
+$$
 
-The experiments are intended for a Linux GPU environment.
+5. Compute process-sensitive, step-level group-relative advantages and retain the clipped policy optimization pipeline used by GRPO.
+
+The released `milestone_gae` implementation is the milestone-anchored WPM instantiation used in the policy-optimization experiments.
+
+## Results
+
+### Pretrained models expose progress structure
+
+Across seven evaluated language and vision-language models:
+
+- Mean pairwise progress accuracy is **92.52%**, compared with a 50% random baseline.
+- Mean milestone localization accuracy is **74.71%**, far above the per-environment random baselines (20.00% on ALFWorld and 15.27% on ScienceWorld).
+- The best evaluated model reaches **90.33%** average accuracy across both tasks and environments.
+
+These capability results use environment-grounded labels only for evaluation; the labels are not given to the WPM.
+
+### WPM-guided optimization improves task success
+
+Success rate (%) under matched actor-training configurations:
+
+| Actor policy | ALFWorld GRPO | ALFWorld WPM | ScienceWorld GRPO | ScienceWorld WPM |
+|---|---:|---:|---:|---:|
+| Qwen2.5-3B | 53.90 | **60.50** | 51.56 | **55.39** |
+| Qwen2.5-7B | 68.70 | **72.10** | 66.40 | **74.73** |
+| Qwen3-4B | 48.43 | **53.64** | 42.96 | **46.09** |
+
+<p align="center">
+  <img src="assets/readme/trajectory_length.png" width="620" alt="Average trajectory length for GRPO and WPM on ALFWorld and ScienceWorld">
+</p>
+
+<p align="center"><em>Average evaluation trajectory length in environment actions. Lower is better; WPM reduces interaction length in all six matched comparisons.</em></p>
+
+## Quick Start
+
+The release targets Linux machines with NVIDIA GPUs. Python 3.12 is recommended; ScienceWorld additionally requires Java 8 or newer.
+
+### 1. Install
 
 ```bash
-conda create -n verl-agent python=3.12 -y
-conda activate verl-agent
+git clone https://github.com/Gabrile166/agent-verl.git
+cd agent-verl
+
+conda create -n wpm python=3.12 -y
+conda activate wpm
 
 pip install vllm==0.11.0
 pip install flash-attn==2.7.4.post1 --no-build-isolation --no-cache-dir
 pip install -e .
 ```
 
-Install ALFWorld:
+Install the environment you want to run:
+
+<details>
+<summary><strong>ALFWorld</strong></summary>
 
 ```bash
-pip install gymnasium==0.29.1
-pip install stable-baselines3==2.6.0
-pip install alfworld
+pip install gymnasium==0.29.1 stable-baselines3==2.6.0 alfworld
 alfworld-download -f
-```
-
-Set the ALFWorld data path if it is not under the default cache directory:
-
-```bash
 export ALFWORLD_DATA=$HOME/.cache/alfworld
 ```
 
-Install SciWorld. Java 1.8 or newer is required.
+</details>
+
+<details>
+<summary><strong>ScienceWorld</strong></summary>
 
 ```bash
 cd agent_system/environments/env_package/sciworld/ScienceWorld
@@ -107,11 +132,9 @@ pip install -e .
 cd -
 ```
 
-## Data Preparation
+</details>
 
-The parquet files used by the trainer are lightweight query placeholders. The
-actual ALFWorld and SciWorld tasks are sampled by the environments during
-rollout.
+### 2. Prepare rollout queries
 
 ```bash
 python3 -m examples.data_preprocess.prepare \
@@ -121,183 +144,84 @@ python3 -m examples.data_preprocess.prepare \
   --val_data_size 128
 ```
 
-This creates:
-
-```text
-data/verl-agent/text/train.parquet
-data/verl-agent/text/test.parquet
-```
-
-## Reproducing GRPO Baselines
-
-ALFWorld:
+### 3. Run a baseline
 
 ```bash
+# ALFWorld, outcome-only GRPO
 MODEL_PATH=Qwen/Qwen2.5-7B-Instruct \
-DATA_DIR=$PWD/data/verl-agent/text \
 ALFWORLD_DATA=$HOME/.cache/alfworld \
 bash examples/grpo_trainer/run_alfworld.sh
 ```
 
-SciWorld:
+For ScienceWorld, use `examples/grpo_trainer/run_sciworld.sh`. The public GRPO scripts use `seed=42` by default.
+
+### 4. Run WPM-guided optimization
+
+Start two OpenAI-compatible judge/generator endpoints:
 
 ```bash
-MODEL_PATH=Qwen/Qwen2.5-7B-Instruct \
-DATA_DIR=$PWD/data/verl-agent/text \
-bash examples/grpo_trainer/run_sciworld.sh
-```
-
-For Qwen2.5-3B, keep the same script and change only `MODEL_PATH` and
-`EXP_NAME`:
-
-```bash
-MODEL_PATH=Qwen/Qwen2.5-3B-Instruct \
-EXP_NAME=grpo_qwen2_5_3b_alfworld_ood \
-ALFWORLD_DATA=$HOME/.cache/alfworld \
-bash examples/grpo_trainer/run_alfworld.sh
-```
-
-## Reproducing Milestone-GAE
-
-Milestone-GAE requires an OpenAI-compatible judge/generator service. The release
-scripts default to two local endpoints:
-
-```text
-http://127.0.0.1:8080/v1
-http://127.0.0.1:8081/v1
-```
-
-Example judge service launches:
-
-```bash
+# Terminal 1
 python -m vllm.entrypoints.openai.api_server \
-  --model Qwen3-VL-32B-Instruct-FP8 \
+  --model Qwen/Qwen3-VL-32B-Thinking-FP8 \
+  --served-model-name wpm-judge \
   --port 8080
 
+# Terminal 2
 python -m vllm.entrypoints.openai.api_server \
-  --model Qwen3-VL-32B-Instruct-FP8 \
+  --model Qwen/Qwen3-VL-32B-Thinking-FP8 \
+  --served-model-name wpm-judge \
   --port 8081
 ```
 
-ALFWorld:
+Then launch the milestone-anchored WPM training job:
 
 ```bash
 MODEL_PATH=Qwen/Qwen2.5-7B-Instruct \
-DATA_DIR=$PWD/data/verl-agent/text \
 ALFWORLD_DATA=$HOME/.cache/alfworld \
 JUDGE_LLM_URL_1=http://127.0.0.1:8080/v1 \
 JUDGE_LLM_URL_2=http://127.0.0.1:8081/v1 \
+JUDGE_LLM_MODEL=wpm-judge \
 bash examples/milestone_gae_trainer/run_alfworld.sh
 ```
 
-SciWorld:
+All entry scripts accept environment variables and trailing Hydra overrides. See the [full reproduction guide](examples/RELEASE_REPRODUCTION.md) for Qwen2.5-3B, Qwen3-4B, ScienceWorld, multi-node settings, judge configuration, and low-resource smoke tests.
 
-```bash
-MODEL_PATH=Qwen/Qwen2.5-7B-Instruct \
-DATA_DIR=$PWD/data/verl-agent/text \
-JUDGE_LLM_URL_1=http://127.0.0.1:8080/v1 \
-JUDGE_LLM_URL_2=http://127.0.0.1:8081/v1 \
-bash examples/milestone_gae_trainer/run_sciworld.sh
-```
+## Released Entry Points
 
-For Qwen2.5-3B:
-
-```bash
-MODEL_PATH=Qwen/Qwen2.5-3B-Instruct \
-EXP_NAME=milestone_gae_qwen2_5_3b_sciworld_l1 \
-bash examples/milestone_gae_trainer/run_sciworld.sh
-```
-
-## Running Qwen3-4B
-
-To use Qwen3-4B as the actor policy, disable Qwen3 thinking in the chat
-template:
-
-```bash
-MODEL_PATH=Qwen/Qwen3-4B \
-ENABLE_THINKING=False \
-EXP_NAME=grpo_qwen3_4b_sciworld_l1 \
-bash examples/grpo_trainer/run_sciworld.sh
-```
-
-```bash
-MODEL_PATH=Qwen/Qwen3-4B \
-ENABLE_THINKING=False \
-EXP_NAME=milestone_gae_qwen3_4b_alfworld_ood \
-ALFWORLD_DATA=$HOME/.cache/alfworld \
-bash examples/milestone_gae_trainer/run_alfworld.sh
-```
-
-`ENABLE_THINKING=False` expands to:
-
-```text
-+data.apply_chat_template_kwargs.enable_thinking=False
-```
-
-## Important Runtime Overrides
-
-All release scripts accept environment variables and trailing Hydra overrides.
-
-| Variable | Default | Description |
+| Method | Environment | Entry point |
 |---|---|---|
-| `MODEL_PATH` | `Qwen/Qwen2.5-7B-Instruct` | Actor policy model |
-| `DATA_DIR` | `$REPO_ROOT/data/verl-agent/text` | Directory with `train.parquet` and `test.parquet` |
-| `EXP_NAME` | script-specific | Experiment name |
-| `TRAIN_BATCH_SIZE` | `16` | Number of query groups per training step |
-| `VAL_BATCH_SIZE` | `128` or `64` | Number of validation episodes |
-| `GROUP_SIZE` | `8` | Policy rollouts per training query |
-| `TRAINER_LOGGER` | `['console','wandb']` | Trainer loggers |
-| `NUM_GPUS_PER_NODE` | `8` | GPUs per node |
-| `RAY_NUM_CPUS` | script-specific | Ray CPU budget |
-| `CONDA_SETUP_SCRIPT` | unset | Optional conda bootstrap script |
-| `CONDA_ENV_NAME` | unset | Optional conda environment to activate |
-| `MY_TEMP_DIR` | `/tmp/verl-agent/$USER/$EXP_NAME` | Ray, vLLM, torch, and Triton cache root |
+| Outcome-only GRPO | ALFWorld | `examples/grpo_trainer/run_alfworld.sh` |
+| Outcome-only GRPO | ScienceWorld | `examples/grpo_trainer/run_sciworld.sh` |
+| WPM (milestone anchored) | ALFWorld | `examples/milestone_gae_trainer/run_alfworld.sh` |
+| WPM (milestone anchored) | ScienceWorld | `examples/milestone_gae_trainer/run_sciworld.sh` |
 
-Milestone-GAE-specific variables:
+Useful shared overrides include `MODEL_PATH`, `DATA_DIR`, `EXP_NAME`, `TRAIN_BATCH_SIZE`, `VAL_BATCH_SIZE`, `GROUP_SIZE`, `NUM_GPUS_PER_NODE`, `TRAINER_LOGGER`, and `MY_TEMP_DIR`.
 
-| Variable | Default | Description |
-|---|---|---|
-| `MILESTONE_GAMMA` | `0.99` | Discount factor used by Milestone-GAE |
-| `MILESTONE_LAMBDA` | `0.95` | GAE lambda |
-| `MILESTONE_COST` | `0.05` | Per-step cost |
-| `GENERATOR_ENABLE` | `true` | Enable dynamic milestone generation |
-| `GENERATOR_NUM_MILESTONES` | `5` | Number of generated milestones |
-| `JUDGE_LLM_MODEL` | `Qwen3-VL-32B-Instruct-FP8` | Judge and generator model |
-| `JUDGE_LLM_URL_1` | `http://127.0.0.1:8080/v1` | First judge endpoint |
-| `JUDGE_LLM_URL_2` | `http://127.0.0.1:8081/v1` | Second judge endpoint |
+## Repository Map
 
-For low-resource smoke tests, use:
-
-```bash
-TRAIN_BATCH_SIZE=1 GROUP_SIZE=1 VAL_BATCH_SIZE=4 TRAINER_LOGGER='[console]' \
-bash examples/grpo_trainer/run_sciworld.sh
-```
-
-## Evaluation Splits
-
-- ALFWorld uses `alfworld/AlfredTWEnv` and evaluates on
-  `eval_out_of_distribution`, corresponding to the `valid_unseen` split.
-- SciWorld uses `sciworld/ScienceWorldEnv` with
-  `env.sciworld.generalization_level=1`; training samples L1 train variations
-  and validation samples L1 test variations.
-
-## Additional Documentation
-
-For a fuller reproduction record, see:
-
-- `examples/RELEASE_REPRODUCTION.md`
-- `examples/doc/release_readiness_review.md`
-- `examples/doc/grpo_algorithm.md`
-- `examples/doc/milestone_gae_algorithm.md`
-
-## Acknowledgement
-
-This codebase builds on `verl-agent` and `veRL`. The environments are adapted
-from ALFWorld and ScienceWorld/SciWorld. We thank the authors and contributors
-of these projects.
+| Path | Purpose |
+|---|---|
+| `rlvmr/core_milestone_gae.py` | Core milestone-anchored world-potential advantage computation |
+| `rlvmr/milestone/` | Milestone generator and frozen judge clients |
+| `examples/grpo_trainer/` | Matched outcome-only GRPO baselines |
+| `examples/milestone_gae_trainer/` | WPM-guided ALFWorld and ScienceWorld experiments |
+| `examples/RELEASE_REPRODUCTION.md` | Complete release and reproduction notes |
+| `examples/doc/milestone_gae_algorithm.md` | Algorithm and implementation details |
+| `agent_system/environments/` | Long-horizon environment integration |
 
 ## Citation
 
-If you use this repository, please cite the paper associated with
-Milestone-GAE. The BibTeX entry will be updated when the paper metadata is
-finalized.
+The public paper link and archival citation will be added when available. For now, please use:
+
+```bibtex
+@misc{zhao2026worldpotential,
+  title  = {World Potential Model: Pretrained World Knowledge as Progress Potentials},
+  author = {Jun Zhao and Jixin Tang and Yang Shu and Jinyang Wu and Yuyang Lu and Jingqi Tong and Qi Zhang and Xuanjing Huang},
+  year   = {2026},
+  note   = {Preprint}
+}
+```
+
+## Acknowledgements
+
+This project builds on [verl-agent](https://github.com/langfengQ/verl-agent) and [veRL](https://github.com/volcengine/verl). The released environments are adapted from [ALFWorld](https://github.com/alfworld/alfworld) and [ScienceWorld](https://github.com/allenai/ScienceWorld). We thank their authors and contributors for making this research possible.

@@ -1,7 +1,9 @@
-# Reproducing GRPO and Milestone-GAE Experiments
+# Reproducing GRPO and WPM-Guided Experiments
 
-This document is the release entry point for reproducing the GRPO baseline and
-Milestone-GAE experiments on ALFWorld and SciWorld.
+This document is the release entry point for reproducing the outcome-only GRPO
+baseline and the milestone-anchored World Potential Model (WPM) experiments on
+ALFWorld and ScienceWorld. The release keeps the internal `milestone_gae`
+identifier for compatibility with the published scripts and configuration.
 
 ## Scope
 
@@ -10,9 +12,9 @@ The release scripts cover four main training jobs:
 | Method | Environment | Script |
 |---|---|---|
 | GRPO baseline | ALFWorld | `examples/grpo_trainer/run_alfworld.sh` |
-| GRPO baseline | SciWorld | `examples/grpo_trainer/run_sciworld.sh` |
-| Milestone-GAE | ALFWorld | `examples/milestone_gae_trainer/run_alfworld.sh` |
-| Milestone-GAE | SciWorld | `examples/milestone_gae_trainer/run_sciworld.sh` |
+| GRPO baseline | ScienceWorld | `examples/grpo_trainer/run_sciworld.sh` |
+| WPM (milestone anchored) | ALFWorld | `examples/milestone_gae_trainer/run_alfworld.sh` |
+| WPM (milestone anchored) | ScienceWorld | `examples/milestone_gae_trainer/run_sciworld.sh` |
 
 All scripts use `examples/release_common.sh` for shared Ray cleanup, cache
 directories, optional conda activation, rollout engine parsing, and Qwen3 chat
@@ -21,7 +23,7 @@ template overrides.
 ## Data Preparation
 
 The RL dataset files are lightweight query placeholders. The actual tasks are
-sampled by the ALFWorld and SciWorld environments during rollout.
+sampled by the ALFWorld and ScienceWorld environments during rollout.
 
 Prepare the default text parquet files:
 
@@ -44,14 +46,14 @@ ALFWorld additionally needs its environment data. Point `ALFWORLD_DATA` to the
 directory that contains `json_2.1.1/train`, `json_2.1.1/valid_seen`, and
 `json_2.1.1/valid_unseen`.
 
-SciWorld uses generalization level 1 in the scripts:
+ScienceWorld uses generalization level 1 in the scripts:
 
 ```text
 env.sciworld.generalization_level=1
 ```
 
 Training uses the L1 train variations and validation uses the L1 test
-variations from the SciWorld environment package.
+variations from the ScienceWorld environment package.
 
 ## Runtime Setup
 
@@ -95,7 +97,7 @@ ALFWORLD_DATA=/path/to/alfworld \
 bash examples/grpo_trainer/run_alfworld.sh
 ```
 
-Run SciWorld:
+Run ScienceWorld:
 
 ```bash
 MODEL_PATH=Qwen/Qwen2.5-7B-Instruct \
@@ -109,10 +111,11 @@ to `vllm`:
 bash examples/grpo_trainer/run_sciworld.sh vllm trainer.logger='[console]'
 ```
 
-## Milestone-GAE
+## WPM-Guided Optimization
 
-Milestone-GAE requires an OpenAI-compatible judge/generator service. By default
-the scripts use two local endpoints for simple load balancing:
+The milestone-anchored WPM implementation requires an OpenAI-compatible
+judge/generator service. By default, the scripts use two local endpoints for
+simple load balancing:
 
 ```text
 http://127.0.0.1:8080/v1
@@ -123,13 +126,19 @@ Example vLLM launch commands:
 
 ```bash
 python -m vllm.entrypoints.openai.api_server \
-  --model Qwen3-VL-32B-Instruct-FP8 \
+  --model Qwen/Qwen3-VL-32B-Thinking-FP8 \
+  --served-model-name wpm-judge \
   --port 8080
 
 python -m vllm.entrypoints.openai.api_server \
-  --model Qwen3-VL-32B-Instruct-FP8 \
+  --model Qwen/Qwen3-VL-32B-Thinking-FP8 \
+  --served-model-name wpm-judge \
   --port 8081
 ```
+
+These paper-aligned examples explicitly serve the cited Qwen3-VL-32B
+checkpoint as `wpm-judge`. Pass the same served model name to the training
+script as shown below.
 
 Run ALFWorld:
 
@@ -138,24 +147,26 @@ MODEL_PATH=Qwen/Qwen2.5-7B-Instruct \
 ALFWORLD_DATA=/path/to/alfworld \
 JUDGE_LLM_URL_1=http://127.0.0.1:8080/v1 \
 JUDGE_LLM_URL_2=http://127.0.0.1:8081/v1 \
+JUDGE_LLM_MODEL=wpm-judge \
 bash examples/milestone_gae_trainer/run_alfworld.sh
 ```
 
-Run SciWorld:
+Run ScienceWorld:
 
 ```bash
 MODEL_PATH=Qwen/Qwen2.5-7B-Instruct \
 JUDGE_LLM_URL_1=http://127.0.0.1:8080/v1 \
 JUDGE_LLM_URL_2=http://127.0.0.1:8081/v1 \
+JUDGE_LLM_MODEL=wpm-judge \
 bash examples/milestone_gae_trainer/run_sciworld.sh
 ```
 
-Milestone-specific overrides:
+WPM implementation overrides:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MILESTONE_GAMMA` | `0.99` | Milestone-GAE discount factor |
-| `MILESTONE_LAMBDA` | `0.95` | GAE lambda |
+| `MILESTONE_GAMMA` | `0.99` | Base discount factor used by the released WPM implementation |
+| `MILESTONE_LAMBDA` | `0.95` | Process-sensitivity coefficient (`rho` in the paper; `lam` in the release config) |
 | `MILESTONE_COST` | `0.05` | Per-step cost |
 | `GENERATOR_ENABLE` | `true` | Enable dynamic milestone generation |
 | `GENERATOR_NUM_MILESTONES` | `5` | Number of generated milestones |
@@ -218,17 +229,21 @@ ALFWorld uses the average over three training seeds.
 |---|---|---:|---:|
 | GRPO baseline | Qwen2.5-3B | 53.9 | 17.36 |
 | GRPO baseline | Qwen2.5-7B | 68.7 | 14.30 |
-| Milestone-GAE | Qwen2.5-3B | 60.5 | 14.06 |
-| Milestone-GAE | Qwen2.5-7B | 72.1 | 10.71 |
+| GRPO baseline | Qwen3-4B | 48.43 | 16.27 |
+| WPM | Qwen2.5-3B | 60.5 | 14.06 |
+| WPM | Qwen2.5-7B | 72.1 | 10.71 |
+| WPM | Qwen3-4B | 53.64 | 14.75 |
 
-SciWorld:
+ScienceWorld:
 
 | Method | Model | val | step_length |
 |---|---|---:|---:|
 | GRPO baseline | Qwen2.5-3B | 51.56 | 17.72 |
 | GRPO baseline | Qwen2.5-7B | 66.40 | 19.52 |
-| Milestone-GAE | Qwen2.5-3B | 55.39 | 12.79 |
-| Milestone-GAE | Qwen2.5-7B | 74.73 | 10.66 |
+| GRPO baseline | Qwen3-4B | 42.96 | 8.71 |
+| WPM | Qwen2.5-3B | 55.39 | 12.79 |
+| WPM | Qwen2.5-7B | 74.73 | 10.66 |
+| WPM | Qwen3-4B | 46.09 | 6.74 |
 
 `val` is reported as success rate percentage. `step_length` is the average
 episode interaction length.
